@@ -69,6 +69,7 @@
 │   └── DECISIONS_AND_TBD.md              # Decision Matrix & TBD Parameters
 │
 ├── .env.example                          # Environment Variables Example (No Secrets)
+├── package-lock.json                     # Deterministic Dependency Lockfile for npm ci
 └── README.md                             # Project Documentation
 ```
 

@@ -32,7 +32,8 @@ public class LdapsReadService : IDirectoryReadService
             throw new InvalidOperationException("Live AD LDAPS connection is disabled in Phase 1. Refer to docs/AD_INTEGRATION_PLAN.md.");
         }
 
-        var identifier = new LdapDirectoryIdentifier(serverAddress, port, fullyQualifiedDnsHostName: true, connectionIsBound: false);
+        // System.DirectoryServices.Protocols constructor: (string server, int portNumber)
+        var identifier = new LdapDirectoryIdentifier(serverAddress, port);
         var credentials = new NetworkCredential(serviceUsername, servicePassword);
 
         var connection = new LdapConnection(identifier, credentials, AuthType.Negotiate);
