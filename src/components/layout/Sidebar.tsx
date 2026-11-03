@@ -14,6 +14,8 @@ import {
 } from 'lucide-react';
 import { CurrentUser } from '../../types/ad';
 
+import { hasPageAccess, PAGE_PERMISSIONS } from '../../utils/rbac';
+
 interface SidebarProps {
   currentPage: string;
   onNavigate: (page: string) => void;
@@ -31,51 +33,42 @@ export const Sidebar: React.FC<SidebarProps> = ({
       label: 'แดชบอร์ดภาพรวม',
       subLabel: 'Dashboard Summary',
       icon: LayoutDashboard,
-      roles: ['Viewer', 'Helpdesk', 'ADOperator', 'SecurityAuditor', 'SystemAdministrator'],
     },
     {
       id: 'users',
       label: 'ผู้ใช้งานในระบบ',
       subLabel: 'Users & Accounts',
       icon: Users,
-      roles: ['Viewer', 'Helpdesk', 'ADOperator', 'SecurityAuditor', 'SystemAdministrator'],
     },
     {
       id: 'computers',
       label: 'เครื่องคอมพิวเตอร์',
       subLabel: 'Computers & Servers',
       icon: Monitor,
-      roles: ['Viewer', 'Helpdesk', 'ADOperator', 'SecurityAuditor', 'SystemAdministrator'],
     },
     {
       id: 'ous',
       label: 'โครงสร้างหน่วยงาน',
       subLabel: 'Organizational Units',
       icon: FolderTree,
-      roles: ['Viewer', 'Helpdesk', 'ADOperator', 'SecurityAuditor', 'SystemAdministrator'],
     },
     {
       id: 'groups',
       label: 'กลุ่มสิทธิ์ความปลอดภัย',
       subLabel: 'Security & Distribution Groups',
       icon: UsersRound,
-      roles: ['Viewer', 'Helpdesk', 'ADOperator', 'SecurityAuditor', 'SystemAdministrator'],
     },
     {
       id: 'audit',
       label: 'บันทึกการตรวจสอบ',
       subLabel: 'Audit Trails (Read-Only)',
       icon: FileText,
-      roles: ['SecurityAuditor', 'SystemAdministrator'],
-      restrictedFor: ['Viewer', 'Helpdesk', 'ADOperator'],
     },
     {
       id: 'settings',
       label: 'การเชื่อมต่อ & สถาปัตยกรรม',
       subLabel: 'Architecture & TBD Gates',
       icon: Settings,
-      roles: ['SystemAdministrator', 'SecurityAuditor', 'ADOperator'],
-      restrictedFor: ['Viewer', 'Helpdesk'],
     },
   ];
 
@@ -100,7 +93,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
         {navItems.map((item) => {
           const isActive = currentPage === item.id;
-          const isRestricted = item.restrictedFor?.includes(currentUser.role);
+          const isAllowed = hasPageAccess(currentUser.role, item.id);
+          const isRestricted = !isAllowed;
           const Icon = item.icon;
 
           return (

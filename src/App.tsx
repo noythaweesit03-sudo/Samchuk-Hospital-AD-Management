@@ -18,16 +18,11 @@ import { AuditView } from './features/audit/AuditView';
 import { SettingsView } from './features/settings/SettingsView';
 import { ErrorScreens } from './features/errors/ErrorScreens';
 
+import { hasPageAccess } from './utils/rbac';
+
 export default function App() {
-  // Current user state (defaults to SystemAdministrator for immediate evaluation)
-  const [currentUser, setCurrentUser] = useState<CurrentUser | null>({
-    id: 'mock-usr-admin',
-    username: 'somchai.jai',
-    displayName: 'นาย สมชาย ใจมั่นคง',
-    role: 'SystemAdministrator',
-    department: 'ศูนย์คอมพิวเตอร์และสารสนเทศ',
-    sessionExpiry: new Date(Date.now() + 8 * 3600 * 1000).toISOString(),
-  });
+  // Current user state: starts as null to always present Demo Login first
+  const [currentUser, setCurrentUser] = useState<CurrentUser | null>(null);
 
   const [currentPage, setCurrentPage] = useState<string>('dashboard');
   const [errorPreview, setErrorPreview] = useState<'403' | '404' | 'expired' | null>(null);
@@ -48,22 +43,17 @@ export default function App() {
     });
 
     // Check if new role has access to current page
-    if ((newRole === 'Viewer' || newRole === 'Helpdesk') && (currentPage === 'audit' || currentPage === 'settings')) {
-      setCurrentPage('dashboard');
+    if (!hasPageAccess(newRole, currentPage)) {
+      setErrorPreview('403');
     }
   };
 
-  // Navigation with RBAC check
+  // Navigation with centralized RBAC check
   const handleNavigate = (page: string) => {
     setErrorPreview(null);
 
-    // RBAC validation
-    if (currentUser?.role === 'Viewer' && (page === 'audit' || page === 'settings')) {
-      setErrorPreview('403');
-      return;
-    }
-
-    if (currentUser?.role === 'Helpdesk' && page === 'settings') {
+    // Enforce Demo RBAC check
+    if (!hasPageAccess(currentUser?.role, page)) {
       setErrorPreview('403');
       return;
     }

@@ -34,8 +34,35 @@ builder.Services.AddCors(options =>
 builder.Services.AddSingleton<IDirectoryReadService, LdapReadServiceMock>();
 builder.Services.AddSingleton<IAuditLogRepository, InMemoryAuditLogRepository>();
 
-// NOTE: IDirectoryWriteService is intentionally NOT registered!
+// =========================================================================
+// PHASE 2 & 3 AUTHENTICATION / AUTHORIZATION DESIGN:
+// =========================================================================
+// In Phase 1 Mock mode, backend RBAC is NOT enforced; mock data is returned directly.
+// For Phase 2/3 live deployment, authentication must be activated via:
+//
+// 1. Windows Authentication (Negotiate / Kerberos) on Hospital Intranet:
+//    builder.Services.AddAuthentication(NegotiateDefaults.AuthenticationScheme)
+//                   .AddNegotiate();
+//
+// 2. OR Enterprise Hospital OIDC/JWT Bearer Token:
+//    builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
+//                   .AddJwtBearer(options => {
+//                       options.Authority = builder.Configuration["Authentication:Authority"];
+//                       options.Audience = "samchuk-ad-mgmt";
+//                   });
+//
+// 3. Claims Transformation to UserRole (Viewer, Helpdesk, ADOperator, SecurityAuditor, SystemAdministrator):
+//    builder.Services.AddTransient<IClaimsTransformation, HospitalAdRoleClaimsTransformation>();
+//
+// 4. Role Authorization Policies:
+//    builder.Services.AddAuthorization(options => {
+//        options.AddPolicy("AuditorOnly", policy => policy.RequireRole("SecurityAuditor", "SystemAdministrator"));
+//        options.AddPolicy("ConfigAccess", policy => policy.RequireRole("ADOperator", "SecurityAuditor", "SystemAdministrator"));
+//    });
+//
+// CRITICAL SECURITY GUARD: IDirectoryWriteService is intentionally NOT registered!
 // This guarantees zero write capabilities in Phase 1.
+// =========================================================================
 
 var app = builder.Build();
 

@@ -1,6 +1,6 @@
 # Samchuk Hospital AD Management — Security Architecture & Guidelines
 
-Version: 1.0 (Phase 1)  
+Version: 1.1 (Phase 1 Code Review & Hardening)  
 Target: Samchuk Hospital Active Directory Management (Windows Server 2025)
 
 ---
@@ -10,20 +10,28 @@ Target: Samchuk Hospital Active Directory Management (Windows Server 2025)
 - **Enforcement:**
   - `IDirectoryWriteService` is purposefully unmapped and unregistered in Dependency Injection.
   - The UI presents write operations (Create, Edit, Disable, Unlock, Reset Password) with clear "Planned for Phase 4" modal dialogs.
+  - Automated tests (`tests/writeOperationsDisabled.test.ts`) assert that write operations are absent and strictly blocked.
   - No LDAP modify, add, delete, or modifyDN packets are transmitted to any network endpoint.
 
 ---
 
-## 2. Authentication and Authorization (RBAC)
-The application enforces 5 role tiers:
-1. **Viewer:** Read-only access to basic dashboard metrics and user listings.
-2. **Helpdesk:** User lookups, employee ID, telephone numbers, and computer basic status.
-3. **ADOperator:** Organizational Units, directory hierarchy, and group memberships.
-4. **SecurityAuditor:** Read-only access to immutable audit trails, role distributions, and security group memberships.
-5. **SystemAdministrator:** Full administrative visibility across all modules.
+## 2. Authentication and Authorization (Demo RBAC vs Phase 2/3)
+### Phase 1 Demo RBAC:
+- Starts at the Demo Login page (`currentUser = null`).
+- Centralized rule engine (`src/utils/rbac.ts`) evaluates page transitions.
+- Displays HTTP 403 Forbidden with clear badge: `"การจำลองสิทธิ์ในโหมดสาธิต (Demo RBAC Simulation) — ยังไม่ใช่ Production Authentication"`.
+- Covers 5 role tiers:
+  1. **Viewer:** Read-only access to basic dashboard metrics and user listings.
+  2. **Helpdesk:** User lookups, employee ID, telephone numbers, and computer basic status.
+  3. **ADOperator:** Organizational Units, directory hierarchy, group memberships, and settings.
+  4. **SecurityAuditor:** Read-only access to immutable audit trails, role distributions, and security group memberships.
+  5. **SystemAdministrator:** Full administrative visibility across all modules.
 
-*Future Live Auth Gate (Phase 3):*
-Production authentication will integrate with hospital-approved Enterprise MFA. Passwords and credentials will never be retained in client-side storage (`localStorage` or `sessionStorage`).
+### Phase 2/3 Production Authentication Architecture:
+- ASP.NET Core endpoints are designed for Windows Authentication (Negotiate / Kerberos) on the internal hospital network or OpenID Connect (OIDC) JWT Bearer authentication from the Hospital Identity Provider.
+- Claims transformation service `HospitalAdRoleClaimsTransformation` maps internal security groups to application `UserRole` claims.
+- The system will enforce server-side `[Authorize(Roles = "...")]` policies.
+- In Phase 1, the backend controllers explicitly document that mock data is returned without production authentication enforcement.
 
 ---
 

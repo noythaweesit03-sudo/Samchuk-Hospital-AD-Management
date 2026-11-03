@@ -19,6 +19,10 @@ export const ErrorScreens: React.FC<ErrorScreenProps> = ({
           <ShieldAlert className="w-8 h-8" />
         </div>
         <div>
+          <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-amber-100 text-amber-900 border border-amber-300 mb-2">
+            <span>การจำลองสิทธิ์ในโหมดสาธิต (Demo RBAC Simulation) — ยังไม่ใช่ Production Authentication</span>
+          </div>
+          <br />
           <span className="font-mono text-xs font-bold text-red-600 bg-red-50 border border-red-200 px-2 py-0.5 rounded">
             HTTP 403 FORBIDDEN
           </span>
@@ -27,13 +31,16 @@ export const ErrorScreens: React.FC<ErrorScreenProps> = ({
           </h2>
           <p className="text-xs text-slate-600 mt-1 max-w-md mx-auto leading-relaxed">
             บทบาท (Role) ของคุณในปัจจุบันไม่ได้รับอนุญาตให้เข้าถึงทรัพยากรนี้ 
-            (ตัวอย่าง: บทบาท Viewer หรือ Helpdesk พยายามเข้าถึง Audit Logs หรือหน้า Settings)
+            (ตัวอย่าง: บทบาท Viewer หรือ Helpdesk ไม่มีสิทธิ์เข้าถึง Audit Logs หรือหน้า Settings)
           </p>
         </div>
 
-        <div className="p-3 bg-slate-50 border border-slate-200 rounded-lg text-[11px] text-slate-600 font-mono text-left">
-          <div>Policy Enforcement: Server-Side RBAC Check</div>
-          <div>Deny Reason: Missing required privilege 'AD_AUDIT_VIEW'</div>
+        <div className="p-3 bg-slate-50 border border-slate-200 rounded-lg text-[11px] text-slate-600 font-mono text-left space-y-1">
+          <div>Policy Enforcement: Demo RBAC Simulation Rule</div>
+          <div>Deny Reason: Current Role lacks permission for this module</div>
+          <div className="text-amber-700 text-[10px] font-sans pt-1 border-t border-slate-200">
+            * ใน Phase 2/3 ระบบจะบังคับใช้การตรวจสอบสิทธิ์ฝั่งเซิร์ฟเวอร์ด้วย Windows Authentication / MFA จริง
+          </div>
         </div>
 
         <div className="pt-2 flex justify-center gap-3">
