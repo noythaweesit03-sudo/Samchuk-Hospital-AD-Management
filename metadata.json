@@ -1,0 +1,6 @@
+{
+  "name": "Samchuk Hospital AD Management (Phase 1 Mock)",
+  "description": "ระบบบริหารจัดการ Active Directory โรงพยาบาลสามชุก - สถาปัตยกรรมและการสาธิต Phase 1 (Mock Data & Architecture)",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
