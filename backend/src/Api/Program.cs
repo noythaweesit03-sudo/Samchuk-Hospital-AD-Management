@@ -86,6 +86,40 @@ app.Use(async (context, next) =>
     await next();
 });
 
+// PRODUCTION SECURITY GUARD (Directive 5):
+// Prohibits exposing unauthenticated Phase 1 Mock endpoints to production network.
+if (!app.Environment.IsDevelopment())
+{
+    app.Use(async (context, next) =>
+    {
+        var allowMockInProd = app.Configuration.GetValue<bool>("Security:AllowUnauthenticatedMockInProduction", false);
+        var isAuthenticated = context.User.Identity?.IsAuthenticated ?? false;
+
+        if (!allowMockInProd && !isAuthenticated && context.Request.Path.StartsWithSegments("/api"))
+        {
+            // Allow health check endpoint only
+            if (context.Request.Path.StartsWithSegments("/api/health"))
+            {
+                await next();
+                return;
+            }
+
+            context.Response.StatusCode = StatusCodes.Status403Forbidden;
+            context.Response.ContentType = "application/json";
+            await context.Response.WriteAsJsonAsync(new
+            {
+                error = "Unauthenticated Phase 1 Mock endpoints are forbidden in Production. Access requires Phase 2/3 Enterprise Authentication.",
+                code = "PRODUCTION_MOCK_FORBIDDEN",
+                requestId = context.TraceIdentifier,
+                timestampUtc = DateTime.UtcNow
+            });
+            return;
+        }
+
+        await next();
+    });
+}
+
 app.UseAuthorization();
 app.MapControllers();
 

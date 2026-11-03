@@ -12,6 +12,7 @@
 - **ระบบเริ่มต้นที่หน้าล็อกอินเสมอ:** `currentUser` เริ่มต้นเป็น `null` เพื่อให้ผู้ตรวจรับต้องเลือกบทบาทจำลองก่อนเข้าสู่ระบบ
 - **ระบบจำลองเท่านั้น:** ข้อมูลทั้งหมดเป็นข้อมูลสังเคราะห์ (Synthetic Data) ไม่มีการดึงหรือเขียนข้อมูลจริง
 - **การจำลองสิทธิ์ Demo RBAC:** ตรวจสอบสิทธิ์แบบรวมศูนย์ (`src/utils/rbac.ts`) แสดงหน้าจอ HTTP 403 Forbidden ชัดเจน พร้อมระบุว่าเป็นการจำลองสิทธิ์ ไม่ใช่ Production Authentication
+- **ห้ามเปิด API Mock สู่เครือข่าย Production:** มีมิดเดิลแวร์ตรวจจับใน `Program.cs` ป้องกันไม่ให้ Mock API ที่ไม่มีการยืนยันตัวตนถูกเรียกใช้งานในสภาพแวดล้อม Production
 - **ไม่มีการเขียนข้อมูล AD:** คำสั่งสร้าง แก้ไข ระงับ ปลดล็อก หรือรีเซ็ตรหัสผ่านถูกจำกัดไว้สำหรับ Phase 4
 - **แยกอิสระจากระบบเดิม:** ไม่เชื่อมต่อกับ Samchuk Central Gateway, IIS 3001/3002, Procurement, Sam_Att, Cash_Cheque, DHCP หรือ FortiGate Captive Portal
 - **ไม่บันทึกความลับ:** บันทึกการตรวจสอบ (Audit Trail) ไม่มีข้อมูลรหัสผ่านหรือความลับใดๆ ทั้งสิ้น
@@ -20,6 +21,10 @@
 
 ## 2. โครงสร้างโปรเจกต์ (Repository Structure)
 ```
+├── .github/
+│   └── workflows/
+│       └── ci.yml                        # GitHub Actions CI Workflow (.NET 8 & Node.js 22)
+│
 ├── src/                                  # React Frontend Application
 │   ├── app/                              # Root App Entry
 │   ├── components/                       # Shared UI Components (Header, Sidebar, DemoBanner)
@@ -38,12 +43,12 @@
 │   ├── types/                            # Typed Entity & DTO Contracts
 │   └── utils/                            # thaiDate.ts, rbac.ts (Centralized RBAC Rules)
 │
-├── tests/                                # Automated Unit Test Suite (32 tests passing)
-│   ├── rbac.test.ts                      # Demo RBAC Matrix Tests
-│   ├── mockApi.test.ts                   # Mock API Operation Tests
-│   ├── pagination.test.ts                # Pagination & Filtering Boundary Tests
-│   ├── inputValidation.test.ts           # Input Sanitization & Edge-Case Tests
-│   └── writeOperationsDisabled.test.ts   # AD Write Operations Lock Tests
+├── tests/                                # Automated Unit Test Suite (34 tests passing)
+│   ├── rbac.test.ts                      # Demo RBAC Matrix Tests (11 tests)
+│   ├── mockApi.test.ts                   # Mock API Operation Tests (11 tests)
+│   ├── pagination.test.ts                # Pagination & Sorting Tests (4 tests)
+│   ├── inputValidation.test.ts           # Input Sanitization & Boundary Tests (6 tests)
+│   └── writeOperationsDisabled.test.ts   # AD Write Operations Lock Tests (2 tests)
 │
 ├── backend/                              # ASP.NET Core Solution (C# Source Files)
 │   ├── SamchukHospital.AdManagement.sln
@@ -79,14 +84,29 @@
 
 ---
 
-## 4. วิธีการติดตั้งและรันในสภาพแวดล้อมจริง (Run Locally)
+## 4. รายงานผลการทดสอบ (Test Execution Status)
 
-### 4.1 Frontend (React + Vite + Tailwind CSS)
+| หมวดการทดสอบ | รายการทดสอบ | สถานะ | รายละเอียด |
+| :--- | :--- | :---: | :--- |
+| **Frontend Tests** | `tests/rbac.test.ts` | **PASSED** (11/11) | ตรวจสอบสิทธิ์ 5 บทบาทครอบคลุม 7 หน้าเมนู |
+| **Frontend Tests** | `tests/mockApi.test.ts` | **PASSED** (11/11) | ดึงข้อมูลสรุป, กรองผู้ใช้, ตรวจสอบคอมพิวเตอร์, OU, กลุ่ม |
+| **Frontend Tests** | `tests/pagination.test.ts` | **PASSED** (4/4) | คำนวณขนาดหน้า, หน้านอกขอบเขต, เรียงลำดับ asc/desc |
+| **Frontend Tests** | `tests/inputValidation.test.ts` | **PASSED** (6/6) | การตัด whitespace, case-insensitivity, ตัวกรองไม่ระบุ |
+| **Frontend Tests** | `tests/writeOperationsDisabled.test.ts`| **PASSED** (2/2) | ล็อกห้ามมีฟังก์ชันเขียนหรือแก้ไขใน API Contract |
+| **Frontend Build** | `npm run lint` (`tsc --noEmit`) | **PASSED** | ผ่าน Typecheck 100% ไม่มีข้อผิดพลาด |
+| **Frontend Build** | `npm run build` (Vite) | **PASSED** | คอมไพล์ Static Bundle สำเร็จ |
+| **Backend Tests** | `dotnet restore / build / test` | **NOT EXECUTED LOCALLY** | สภาพแวดล้อมคอนเทนเนอร์ปัจจุบันไม่มีโปรแกรม `dotnet` ติดตั้งอยู่<br>*(ตั้งค่าผ่าน GitHub Actions CI ใน `.github/workflows/ci.yml` สำหรับรันบน Server)* |
+
+---
+
+## 5. วิธีการติดตั้งและรันในสภาพแวดล้อมจริง (Run Locally)
+
+### 5.1 Frontend (React + Vite + Tailwind CSS)
 ```bash
 # ติดตั้ง dependencies
 npm install
 
-# รัน Automated Unit Tests (32 tests)
+# รัน Automated Unit Tests (34 tests)
 npm test
 
 # รัน Development Server (Port 3000)
@@ -97,7 +117,7 @@ npm run build
 npm run lint
 ```
 
-### 4.2 Backend (ASP.NET Core Web API)
+### 5.2 Backend (ASP.NET Core Web API)
 *(ต้องมี .NET 8.0 SDK บนเครื่องเป้าหมายหรือ Application Server)*
 ```bash
 cd backend
@@ -106,11 +126,10 @@ dotnet build
 dotnet test tests/SamchukHospital.AdManagement.Tests/SamchukHospital.AdManagement.Tests.csproj
 dotnet run --project src/Api/SamchukHospital.AdManagement.Api.csproj
 ```
-*รายงานสภาพแวดล้อม: ในคอนเทนเนอร์นี้ไม่มีคำสั่ง `dotnet` ติดตั้งอยู่ ดังนั้นซอร์สโค้ด C# จึงได้รับการตรวจสอบด้วย Static Review และจัดเตรียมไว้ในโฟลเดอร์ `/backend` เพื่อนำไปคอมไพล์บนเซิร์ฟเวอร์จริงต่อไป*
 
 ---
 
-## 5. การดำเนินการสำหรับ Phase 2
+## 6. การดำเนินการสำหรับ Phase 2
 ก่อนดำเนินการเปิดระบบเชื่อมต่อจริง (Live Read-Only) ใน Phase 2 ฝ่ายโครงสร้างพื้นฐานไอทีโรงพยาบาลสามชุกต้องยืนยันข้อมูลใน `docs/DEPLOYMENT_CHECKLIST.md` และส่งมอบ:
 1. Application Server Hostname & Fixed IP
 2. Enterprise Root CA Chain Certificate
