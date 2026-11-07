@@ -7,17 +7,25 @@ using Microsoft.Extensions.Options;
 namespace SamchukHospital.AdManagement.Api.Security;
 
 /// <summary>
-/// DemoAuthenticationHandler:
-/// Facilitates integration and automated contract testing in development and CI environments
-/// by inspecting 'X-Demo-User' and 'X-Demo-Role' simulated headers.
-/// 
-/// CRITICAL SECURITY GUARD:
-/// Strictly prohibited in Production. In non-development environments, this handler
-/// will fail closed unless explicitly allowed via test configuration.
+/// DemoAuthenticationHandler (DEVELOPMENT & TEST ENVIRONMENTS ONLY):
+/// Facilitates local development and automated CI contract testing by inspecting
+/// simulated HTTP headers: 'X-Demo-User' and 'X-Demo-Role'.
+///
+/// SECURITY WARNING:
+/// 'X-Demo-User' and 'X-Demo-Role' are unverified, client-supplied simulated headers
+/// that are COMPLETELY INSECURE for real/production usage (trivial header spoofing risk).
+///
+/// STRICT ENVIRONMENT ISOLATION:
+/// This handler uses a strict allowlist: it ONLY executes when IWebHostEnvironment is
+/// 'Development' or 'Test'. In 'Production' or any other environment, it immediately
+/// fails closed and rejects authentication.
 /// </summary>
 public class DemoAuthenticationHandler : AuthenticationHandler<AuthenticationSchemeOptions>
 {
     public const string SchemeName = "DemoScheme";
+    public const string InsecureDemoUserHeader = "X-Demo-User";
+    public const string InsecureDemoRoleHeader = "X-Demo-Role";
+
     private readonly IWebHostEnvironment _environment;
 
     public DemoAuthenticationHandler(
@@ -32,23 +40,33 @@ public class DemoAuthenticationHandler : AuthenticationHandler<AuthenticationSch
 
     protected override Task<AuthenticateResult> HandleAuthenticateAsync()
     {
-        // Fail closed in production
-        if (_environment.IsProduction())
+        // STRICT ALLOWLIST: Only permit in Development or Test environments.
+        // Any other environment (Production, Staging, UAT, etc.) immediately fails closed.
+        var isAllowedEnvironment = _environment.IsDevelopment() || _environment.IsEnvironment("Test");
+        if (!isAllowedEnvironment)
         {
+            Logger.LogCritical(
+                "SECURITY BLOCK: DemoAuthenticationHandler rejected authentication attempt in '{Environment}'. " +
+                "Simulated headers '{UserHeader}' and '{RoleHeader}' are insecure and strictly forbidden outside Development/Test.",
+                _environment.EnvironmentName,
+                InsecureDemoUserHeader,
+                InsecureDemoRoleHeader);
+
             return Task.FromResult(AuthenticateResult.Fail(
-                "DemoAuthenticationHandler is strictly prohibited in Production environment."));
+                $"DemoAuthenticationHandler is restricted exclusively to Development and Test environments. " +
+                $"Headers '{InsecureDemoUserHeader}' and '{InsecureDemoRoleHeader}' are insecure simulated headers and cannot be used in Production."));
         }
 
-        if (!Request.Headers.TryGetValue("X-Demo-User", out var userHeader) ||
+        if (!Request.Headers.TryGetValue(InsecureDemoUserHeader, out var userHeader) ||
             string.IsNullOrWhiteSpace(userHeader))
         {
-            // Anonymous / Unauthenticated
             return Task.FromResult(AuthenticateResult.NoResult());
         }
 
-        var username = userHeader.ToString();
-        var role = Request.Headers.TryGetValue("X-Demo-Role", out var roleHeader)
-            ? roleHeader.ToString()
+        var username = userHeader.ToString().Trim();
+        var role = Request.Headers.TryGetValue(InsecureDemoRoleHeader, out var roleHeader) &&
+                   !string.IsNullOrWhiteSpace(roleHeader)
+            ? roleHeader.ToString().Trim()
             : "Viewer";
 
         var claims = new[]
@@ -57,7 +75,7 @@ public class DemoAuthenticationHandler : AuthenticationHandler<AuthenticationSch
             new Claim(ClaimTypes.Name, username),
             new Claim(ClaimTypes.Role, role),
             new Claim("HospitalAffiliation", "SamchukHospital"),
-            new Claim("AuthenticationMode", "DemoSimulation")
+            new Claim("AuthenticationMode", "DemoSimulation_DevTestOnly")
         };
 
         var identity = new ClaimsIdentity(claims, SchemeName);

@@ -1,89 +1,169 @@
 /**
- * Samchuk Hospital AD Management - Session Expiration & Timeout Unit Tests
+ * Samchuk Hospital AD Management - Session Expiration & Access Lock Unit Tests
  * Phase 1 Final Hardening & Verification
- * 
- * Verifies simulated session lifecycle:
+ *
+ * Verifies real session lifecycle and expiration guard in src/utils/session.ts:
  * - Default session window (15 minutes / 900 seconds)
  * - Expiration threshold detection (< 60s warning state, <= 0s expired state)
- * - Reset and extend mechanisms
- * - State transition on expiration and re-authentication
+ * - Strict lockout when expired: cannot navigate to Dashboard or any view,
+ *   cannot dismiss expired screen, cannot extend/reset timer, cannot switch roles
+ *   until performing a new Mock Login.
  */
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import {
+  DEFAULT_SESSION_SECONDS,
+  createInitialSessionState,
+  loginSession,
+  logoutSession,
+  expireSession,
+  tickSession,
+  resetActiveSessionTimer,
+  simulateFiveSecondRemaining,
+  navigateWithSessionGuard,
+  switchRoleWithSessionGuard,
+  triggerErrorPreviewWithSessionGuard,
+  dismissErrorPreviewWithSessionGuard,
+  canRenderProtectedView,
+  isSessionInWarningState,
+  isSessionExpiredState,
+} from '../src/utils/session';
+import { CurrentUser } from '../src/types/ad';
 
-describe('Session Lifecycle & Expiration Logic', () => {
+const MOCK_ADMIN_USER: CurrentUser = {
+  id: 'usr-004',
+  username: 'somchai.jai',
+  displayName: 'นาย สมชาย ใจมั่นคง',
+  role: 'SystemAdministrator',
+  department: 'ศูนย์เทคโนโลยีสารสนเทศ (IT Department)',
+  sessionExpiry: new Date(Date.now() + 900_000).toISOString(),
+};
 
-  const DEFAULT_SESSION_SECONDS = 900; // 15 minutes
-
-  it('Default session window starts at exactly 900 seconds (15 minutes)', () => {
-    const sessionSeconds = DEFAULT_SESSION_SECONDS;
-    assert.equal(sessionSeconds, 900);
-    assert.equal(sessionSeconds / 60, 15);
+describe('Session Lifecycle & Strict Expiration Lockout Logic', () => {
+  it('Default session window starts unauthenticated (null user) with 900 seconds (15 minutes)', () => {
+    const initial = createInitialSessionState();
+    assert.equal(initial.currentUser, null);
+    assert.equal(initial.sessionRemainingSeconds, 900);
+    assert.equal(DEFAULT_SESSION_SECONDS / 60, 15);
+    assert.equal(canRenderProtectedView(initial), false);
   });
 
   it('Session warning threshold triggers when remaining time is under 60 seconds', () => {
-    const isWarning = (seconds: number) => seconds > 0 && seconds < 60;
-
-    assert.equal(isWarning(900), false, '900s should not trigger warning');
-    assert.equal(isWarning(300), false, '300s should not trigger warning');
-    assert.equal(isWarning(60), false, '60s is exact boundary, not under 60s');
-    assert.equal(isWarning(59), true, '59s must trigger warning state');
-    assert.equal(isWarning(5), true, '5s must trigger warning state');
-    assert.equal(isWarning(0), false, '0s is expired, not warning');
+    assert.equal(isSessionInWarningState(900), false, '900s should not trigger warning');
+    assert.equal(isSessionInWarningState(60), false, '60s is exact boundary, not under 60s');
+    assert.equal(isSessionInWarningState(59), true, '59s must trigger warning state');
+    assert.equal(isSessionInWarningState(5), true, '5s must trigger warning state');
+    assert.equal(isSessionInWarningState(0), false, '0s is expired, not warning');
   });
 
-  it('Session expiration state triggers when remaining time reaches 0 seconds', () => {
-    const isExpired = (seconds: number) => seconds <= 0;
+  it('Countdown tick transitions active session to strictly expired state when reaching 0 seconds', () => {
+    let state = loginSession(MOCK_ADMIN_USER);
+    assert.equal(canRenderProtectedView(state), true);
 
-    assert.equal(isExpired(10), false);
-    assert.equal(isExpired(1), false);
-    assert.equal(isExpired(0), true, '0s must transition to expired');
-    assert.equal(isExpired(-1), true, 'Negative time must remain expired');
+    state = simulateFiveSecondRemaining(state);
+    assert.equal(state.sessionRemainingSeconds, 5);
+
+    // Tick 4 times -> 1 second remaining, still active
+    for (let i = 0; i < 4; i++) {
+      state = tickSession(state);
+    }
+    assert.equal(state.sessionRemainingSeconds, 1);
+    assert.equal(isSessionExpiredState(state), false);
+    assert.equal(canRenderProtectedView(state), true);
+
+    // Final tick -> 0 seconds remaining, transitions to expired lock
+    state = tickSession(state);
+    assert.equal(state.sessionRemainingSeconds, 0);
+    assert.equal(state.isSessionExpired, true);
+    assert.equal(state.errorPreview, 'expired');
+    assert.equal(isSessionExpiredState(state), true);
+    assert.equal(canRenderProtectedView(state), false);
   });
 
-  it('Session reset restores full 900-second session window', () => {
-    let sessionRemaining = 45; // simulated degraded session
-    assert.ok(sessionRemaining < 60);
+  it('Expired session strictly blocks navigation to Dashboard and all other views until Mock Login', () => {
+    let state = loginSession(MOCK_ADMIN_USER);
+    state = navigateWithSessionGuard(state, 'users');
+    assert.equal(state.currentPage, 'users');
+    assert.equal(canRenderProtectedView(state), true);
 
-    // Reset handler action
-    sessionRemaining = DEFAULT_SESSION_SECONDS;
-    assert.equal(sessionRemaining, 900);
+    // Expire session
+    state = expireSession(state);
+    assert.equal(state.isSessionExpired, true);
+    assert.equal(state.errorPreview, 'expired');
+    assert.equal(canRenderProtectedView(state), false);
+
+    // Attempt to navigate back to Dashboard or Computers while expired
+    const afterDashboardNav = navigateWithSessionGuard(state, 'dashboard');
+    assert.equal(afterDashboardNav.isSessionExpired, true);
+    assert.equal(afterDashboardNav.errorPreview, 'expired');
+    assert.equal(canRenderProtectedView(afterDashboardNav), false, 'Must not render Dashboard when expired');
+
+    const afterComputersNav = navigateWithSessionGuard(state, 'computers');
+    assert.equal(afterComputersNav.isSessionExpired, true);
+    assert.equal(afterComputersNav.errorPreview, 'expired');
+    assert.equal(canRenderProtectedView(afterComputersNav), false, 'Must not render Computers when expired');
   });
 
-  it('Quick simulation reduces time to 5 seconds for fast automated/manual verification', () => {
-    let sessionRemaining = DEFAULT_SESSION_SECONDS;
-    
-    // Simulate inspector clicking "Simulate 5s"
-    sessionRemaining = 5;
-    assert.equal(sessionRemaining, 5);
+  it('Expired session strictly blocks timer reset/extension, role switching, and error screen dismissal', () => {
+    let state = loginSession(MOCK_ADMIN_USER);
+    state = expireSession(state);
+
+    // 1. Attempt to extend/reset timer while expired -> must remain expired at 0s
+    const afterResetAttempt = resetActiveSessionTimer(state);
+    assert.equal(afterResetAttempt.sessionRemainingSeconds, 0);
+    assert.equal(afterResetAttempt.isSessionExpired, true);
+    assert.equal(afterResetAttempt.errorPreview, 'expired');
+    assert.equal(canRenderProtectedView(afterResetAttempt), false);
+
+    // 2. Attempt to dismiss error screen while expired -> must remain on expired screen
+    const afterDismissAttempt = dismissErrorPreviewWithSessionGuard(state);
+    assert.equal(afterDismissAttempt.errorPreview, 'expired');
+    assert.equal(afterDismissAttempt.isSessionExpired, true);
+    assert.equal(canRenderProtectedView(afterDismissAttempt), false);
+
+    // 3. Attempt to switch role while expired -> must remain locked
+    const afterRoleSwitchAttempt = switchRoleWithSessionGuard(state, 'Viewer');
+    assert.equal(afterRoleSwitchAttempt.errorPreview, 'expired');
+    assert.equal(afterRoleSwitchAttempt.isSessionExpired, true);
+    assert.equal(canRenderProtectedView(afterRoleSwitchAttempt), false);
+
+    // 4. Attempt to switch error preview to 403/404 and then dismiss -> must remain expired
+    const afterPreview403Attempt = triggerErrorPreviewWithSessionGuard(state, '403');
+    assert.equal(afterPreview403Attempt.errorPreview, 'expired');
+    const afterDismiss403Attempt = dismissErrorPreviewWithSessionGuard(afterPreview403Attempt);
+    assert.equal(afterDismiss403Attempt.errorPreview, 'expired');
+    assert.equal(canRenderProtectedView(afterDismiss403Attempt), false);
   });
 
-  it('Immediate expiration reduces time to 0 and raises expired preview', () => {
-    let sessionRemaining = DEFAULT_SESSION_SECONDS;
-    let currentPreview: string | null = null;
+  it('Active (non-expired) session allows timer reset to 900 seconds', () => {
+    let state = loginSession(MOCK_ADMIN_USER);
+    state = simulateFiveSecondRemaining(state);
+    assert.equal(state.sessionRemainingSeconds, 5);
 
-    // Simulate inspector clicking "Expire Now"
-    sessionRemaining = 0;
-    currentPreview = 'expired';
-
-    assert.equal(sessionRemaining, 0);
-    assert.equal(currentPreview, 'expired');
+    state = resetActiveSessionTimer(state);
+    assert.equal(state.sessionRemainingSeconds, 900);
+    assert.equal(state.isSessionExpired, false);
+    assert.equal(canRenderProtectedView(state), true);
   });
 
-  it('Re-authentication resets error preview and restores full session', () => {
-    let currentUser: { username: string } | null = { username: 'somchai.pra' };
-    let errorPreview: string | null = 'expired';
-    let sessionRemaining = 0;
+  it('Only Logout followed by a fresh Mock Login clears expiration lock and restores Dashboard access', () => {
+    let state = loginSession(MOCK_ADMIN_USER);
+    state = expireSession(state);
+    assert.equal(canRenderProtectedView(state), false);
 
-    // Re-authenticate / Logout action
-    currentUser = null;
-    errorPreview = null;
-    sessionRemaining = DEFAULT_SESSION_SECONDS;
+    // Step 1: Click "เข้าสู่ระบบใหม่ (Re-authenticate)" -> logs out to LoginView
+    state = logoutSession();
+    assert.equal(state.currentUser, null);
+    assert.equal(canRenderProtectedView(state), false);
 
-    assert.equal(currentUser, null);
-    assert.equal(errorPreview, null);
-    assert.equal(sessionRemaining, 900);
+    // Step 2: Perform fresh Mock Login
+    state = loginSession(MOCK_ADMIN_USER);
+    assert.notEqual(state.currentUser, null);
+    assert.equal(state.currentPage, 'dashboard');
+    assert.equal(state.sessionRemainingSeconds, 900);
+    assert.equal(state.isSessionExpired, false);
+    assert.equal(state.errorPreview, null);
+    assert.equal(canRenderProtectedView(state), true);
   });
-
 });

@@ -539,6 +539,15 @@ public class LdapReadServiceMock : IDirectoryReadService
             filtered = filtered.Where(u => u.Department.Contains(query.Department));
         }
 
+        var isDesc = string.Equals(query.SortOrder, "desc", StringComparison.OrdinalIgnoreCase);
+        filtered = (query.SortBy?.ToLowerInvariant()) switch
+        {
+            "samaccountname" => isDesc ? filtered.OrderByDescending(u => u.SamAccountName) : filtered.OrderBy(u => u.SamAccountName),
+            "department" => isDesc ? filtered.OrderByDescending(u => u.Department) : filtered.OrderBy(u => u.Department),
+            "status" => isDesc ? filtered.OrderByDescending(u => u.Status) : filtered.OrderBy(u => u.Status),
+            _ => isDesc ? filtered.OrderByDescending(u => u.DisplayName) : filtered.OrderBy(u => u.DisplayName)
+        };
+
         var total = filtered.Count();
         var pageNum = Math.Max(query.PageNumber, 1);
         var pSize = Math.Max(query.PageSize, 1);

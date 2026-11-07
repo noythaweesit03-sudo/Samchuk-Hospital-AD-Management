@@ -21,115 +21,101 @@ import { AuditView } from './features/audit/AuditView';
 import { SettingsView } from './features/settings/SettingsView';
 import { ErrorScreens } from './features/errors/ErrorScreens';
 
-import { hasPageAccess } from './utils/rbac';
-
-const DEFAULT_SESSION_SECONDS = 900; // 15 minutes default mock session
+import {
+  SessionAppState,
+  createInitialSessionState,
+  loginSession,
+  logoutSession,
+  expireSession,
+  tickSession,
+  resetActiveSessionTimer,
+  simulateFiveSecondRemaining,
+  navigateWithSessionGuard,
+  switchRoleWithSessionGuard,
+  triggerErrorPreviewWithSessionGuard,
+  dismissErrorPreviewWithSessionGuard,
+  canRenderProtectedView,
+  isSessionExpiredState,
+} from './utils/session';
 
 export default function App() {
-  // Current user state: starts as null to always present Demo Login first
-  const [currentUser, setCurrentUser] = useState<CurrentUser | null>(null);
-
-  const [currentPage, setCurrentPage] = useState<string>('dashboard');
-  const [errorPreview, setErrorPreview] = useState<'403' | '404' | 'expired' | null>(null);
+  // Centralized session & navigation state: starts with currentUser = null (Demo Login required)
+  const [sessionState, setSessionState] = useState<SessionAppState>(createInitialSessionState);
 
   // Mobile Navigation Drawer state
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState<boolean>(false);
 
-  // Simulated Session Expiration (Task 2: Testable without waiting hours)
-  const [sessionRemainingSeconds, setSessionRemainingSeconds] = useState<number>(DEFAULT_SESSION_SECONDS);
+  const { currentUser, currentPage, errorPreview, sessionRemainingSeconds } = sessionState;
+  const sessionExpired = isSessionExpiredState(sessionState);
 
   // Session timer countdown effect
   useEffect(() => {
-    if (!currentUser || errorPreview === 'expired') return;
+    if (!currentUser || sessionExpired) return;
 
     const timer = setInterval(() => {
-      setSessionRemainingSeconds((prev) => {
-        if (prev <= 1) {
-          setErrorPreview('expired');
-          return 0;
-        }
-        return prev - 1;
-      });
+      setSessionState((prev) => tickSession(prev));
     }, 1000);
 
     return () => clearInterval(timer);
-  }, [currentUser, errorPreview]);
+  }, [currentUser, sessionExpired]);
 
-  // Keyboard accessibility: ESC key dismisses mobile drawer & error screens
+  // Keyboard accessibility: ESC key dismisses mobile drawer & non-expired error screens
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         if (isMobileMenuOpen) {
           setIsMobileMenuOpen(false);
         }
-        if (errorPreview && errorPreview !== 'expired') {
-          setErrorPreview(null);
-        }
+        setSessionState((prev) => dismissErrorPreviewWithSessionGuard(prev));
       }
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isMobileMenuOpen, errorPreview]);
+  }, [isMobileMenuOpen]);
 
-  // Reset session countdown (e.g. user activity or manual extend)
+  // Reset session countdown ( strictly blocked if already expired )
   const handleResetSession = () => {
-    setSessionRemainingSeconds(DEFAULT_SESSION_SECONDS);
+    setSessionState((prev) => resetActiveSessionTimer(prev));
   };
 
   // Immediate expiration for quick inspector testing
   const handleExpireSessionNow = () => {
-    setSessionRemainingSeconds(0);
-    setErrorPreview('expired');
+    setIsMobileMenuOpen(false);
+    setSessionState((prev) => expireSession(prev));
   };
 
   // 5-second quick test for inspector testing
   const handleSimulateExpireInFiveSeconds = () => {
-    setSessionRemainingSeconds(5);
+    setSessionState((prev) => simulateFiveSecondRemaining(prev));
   };
 
   // Handle Login
   const handleLoginSuccess = (user: CurrentUser) => {
-    setCurrentUser(user);
-    setCurrentPage('dashboard');
-    setErrorPreview(null);
-    setSessionRemainingSeconds(DEFAULT_SESSION_SECONDS);
+    setIsMobileMenuOpen(false);
+    setSessionState(loginSession(user));
   };
 
   // Handle Logout
   const handleLogout = () => {
-    setCurrentUser(null);
-    setCurrentPage('dashboard');
-    setErrorPreview(null);
     setIsMobileMenuOpen(false);
-    setSessionRemainingSeconds(DEFAULT_SESSION_SECONDS);
+    setSessionState(logoutSession());
   };
 
-  // Handle Role Switching
+  // Handle Role Switching (strictly blocked if session is expired)
   const handleRoleChange = (newRole: UserRole) => {
-    if (!currentUser) return;
-    setCurrentUser({
-      ...currentUser,
-      role: newRole,
-    });
-
-    // Check if new role has access to current page
-    if (!hasPageAccess(newRole, currentPage)) {
-      setErrorPreview('403');
-    }
+    setSessionState((prev) => switchRoleWithSessionGuard(prev, newRole));
   };
 
-  // Navigation with centralized RBAC check
+  // Navigation with centralized Session Lock & RBAC check
   const handleNavigate = (page: string) => {
-    setErrorPreview(null);
     setIsMobileMenuOpen(false);
+    setSessionState((prev) => navigateWithSessionGuard(prev, page));
+  };
 
-    // Enforce Demo RBAC check
-    if (!hasPageAccess(currentUser?.role, page)) {
-      setErrorPreview('403');
-      return;
-    }
-
-    setCurrentPage(page);
+  // Trigger error preview screen with session lock protection
+  const handleTriggerErrorPreview = (type: '403' | '404' | 'expired') => {
+    setIsMobileMenuOpen(false);
+    setSessionState((prev) => triggerErrorPreviewWithSessionGuard(prev, type));
   };
 
   // If not logged in, show Login Screen
@@ -148,9 +134,13 @@ export default function App() {
         onRoleChange={handleRoleChange}
         onLogout={handleLogout}
         onNavigate={handleNavigate}
-        onTriggerErrorPreview={(type) => setErrorPreview(type)}
+        onTriggerErrorPreview={handleTriggerErrorPreview}
         isMobileMenuOpen={isMobileMenuOpen}
-        onToggleMobileMenu={() => setIsMobileMenuOpen(!isMobileMenuOpen)}
+        onToggleMobileMenu={() => {
+          if (!sessionExpired) {
+            setIsMobileMenuOpen(!isMobileMenuOpen);
+          }
+        }}
         sessionRemainingSeconds={sessionRemainingSeconds}
         onResetSession={handleResetSession}
         onExpireSessionNow={handleExpireSessionNow}
@@ -164,23 +154,25 @@ export default function App() {
           currentPage={currentPage}
           onNavigate={handleNavigate}
           currentUser={currentUser}
-          isMobileOpen={isMobileMenuOpen}
+          isMobileOpen={!sessionExpired && isMobileMenuOpen}
           onCloseMobile={() => setIsMobileMenuOpen(false)}
         />
 
         {/* Right Scrollable Content Area */}
         <main className="flex-1 overflow-y-auto" id="main-content" tabIndex={-1}>
-          {errorPreview ? (
+          {sessionExpired ? (
+            <ErrorScreens
+              type="expired"
+              onDismiss={() => {}}
+              onLoginAgain={handleLogout}
+            />
+          ) : errorPreview ? (
             <ErrorScreens
               type={errorPreview}
-              onDismiss={() => setErrorPreview(null)}
-              onLoginAgain={() => {
-                setErrorPreview(null);
-                setCurrentUser(null);
-                setSessionRemainingSeconds(DEFAULT_SESSION_SECONDS);
-              }}
+              onDismiss={() => setSessionState((prev) => dismissErrorPreviewWithSessionGuard(prev))}
+              onLoginAgain={handleLogout}
             />
-          ) : (
+          ) : canRenderProtectedView(sessionState) ? (
             <>
               {currentPage === 'dashboard' && <DashboardView onNavigate={handleNavigate} />}
               {currentPage === 'users' && <UsersView />}
@@ -190,7 +182,7 @@ export default function App() {
               {currentPage === 'audit' && <AuditView />}
               {currentPage === 'settings' && <SettingsView />}
             </>
-          )}
+          ) : null}
         </main>
       </div>
     </div>

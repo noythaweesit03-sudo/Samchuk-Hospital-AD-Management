@@ -36,15 +36,24 @@ builder.Services.AddCors(options =>
 builder.Services.AddSingleton<IDirectoryReadService, LdapReadServiceMock>();
 builder.Services.AddSingleton<IAuditLogRepository, InMemoryAuditLogRepository>();
 
+// Always register Policy-Based RBAC policies across all environments
+builder.Services.AddHospitalAdAuthorization();
+
 // =========================================================================
-// MOCK AUTHENTICATION & POLICY-BASED RBAC (Phase 1 Testing / Phase 2 Design):
+// MOCK AUTHENTICATION (STRICTLY ISOLATED TO DEVELOPMENT & TEST ONLY):
+// X-Demo-User and X-Demo-Role are insecure simulated headers for Dev/Test only.
+// Never registered in Production.
 // =========================================================================
-if (builder.Environment.IsDevelopment() || builder.Environment.IsEnvironment("Test"))
+var isDevOrTest = builder.Environment.IsDevelopment() || builder.Environment.IsEnvironment("Test");
+if (isDevOrTest)
 {
     builder.Services.AddAuthentication(DemoAuthenticationHandler.SchemeName)
                     .AddScheme<AuthenticationSchemeOptions, DemoAuthenticationHandler>(
                         DemoAuthenticationHandler.SchemeName, _ => { });
-    builder.Services.AddHospitalAdAuthorization();
+}
+else
+{
+    builder.Services.AddAuthentication();
 }
 
 // CRITICAL SECURITY GUARD: IDirectoryWriteService is intentionally NOT registered!
@@ -73,29 +82,52 @@ app.Use(async (context, next) =>
     await next();
 });
 
-// STRICT PRODUCTION SECURITY GUARD (Task 1 Hardening):
-// Prohibits exposing unauthenticated Phase 1 Mock endpoints to production network.
-// Override capability has been completely removed to prevent accidental exposure.
-if (!app.Environment.IsDevelopment())
+app.UseAuthentication();
+
+// STRICT PRODUCTION SECURITY GUARD (Zero-Override Enforcement):
+// 1. Rejects any attempt to pass simulated headers (X-Demo-User / X-Demo-Role) outside Development/Test.
+// 2. Prohibits exposing unauthenticated Phase 1 Mock API endpoints in Production.
+// 3. No configuration overrides exist to weaken or bypass this guard.
+if (!app.Environment.IsDevelopment() && !app.Environment.IsEnvironment("Test"))
 {
     app.Use(async (context, next) =>
     {
-        var isAuthenticated = context.User.Identity?.IsAuthenticated ?? false;
-
-        if (!isAuthenticated && context.Request.Path.StartsWithSegments("/api"))
+        // Allow anonymous health check only
+        if (context.Request.Path.StartsWithSegments("/api/health") || context.Request.Path.StartsWithSegments("/health"))
         {
-            // Allow health check endpoint only
-            if (context.Request.Path.StartsWithSegments("/api/health") || context.Request.Path.StartsWithSegments("/health"))
-            {
-                await next();
-                return;
-            }
+            await next();
+            return;
+        }
 
+        // Explicitly reject insecure simulated headers in Production
+        if (context.Request.Headers.ContainsKey(DemoAuthenticationHandler.InsecureDemoUserHeader) ||
+            context.Request.Headers.ContainsKey(DemoAuthenticationHandler.InsecureDemoRoleHeader))
+        {
             context.Response.StatusCode = StatusCodes.Status403Forbidden;
             context.Response.ContentType = "application/json";
             await context.Response.WriteAsJsonAsync(new
             {
-                error = "Phase 1 Mock endpoints are strictly forbidden in Production without enterprise authentication. No overrides permitted.",
+                error = "Simulated authentication headers (X-Demo-User, X-Demo-Role) are insecure and strictly forbidden in Production.",
+                code = "DEMO_HEADERS_FORBIDDEN_IN_PRODUCTION",
+                requestId = context.TraceIdentifier,
+                timestampUtc = DateTime.UtcNow
+            });
+            return;
+        }
+
+        var isAuthenticated = context.User.Identity?.IsAuthenticated ?? false;
+        var isDemoScheme = string.Equals(
+            context.User.Identity?.AuthenticationType,
+            DemoAuthenticationHandler.SchemeName,
+            StringComparison.OrdinalIgnoreCase);
+
+        if ((!isAuthenticated || isDemoScheme) && context.Request.Path.StartsWithSegments("/api"))
+        {
+            context.Response.StatusCode = StatusCodes.Status403Forbidden;
+            context.Response.ContentType = "application/json";
+            await context.Response.WriteAsJsonAsync(new
+            {
+                error = "Phase 1 Mock endpoints are strictly forbidden in Production without enterprise authentication. No configuration overrides are permitted.",
                 code = "PRODUCTION_MOCK_FORBIDDEN",
                 requestId = context.TraceIdentifier,
                 timestampUtc = DateTime.UtcNow
@@ -107,7 +139,6 @@ if (!app.Environment.IsDevelopment())
     });
 }
 
-app.UseAuthentication();
 app.UseAuthorization();
 app.MapControllers();
 

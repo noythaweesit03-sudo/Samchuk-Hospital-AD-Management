@@ -153,38 +153,58 @@ export const Header: React.FC<HeaderProps> = ({
                 </div>
 
                 <div className="py-1">
-                  <button
-                    onClick={() => {
-                      onResetSession();
-                      setSessionDropdownOpen(false);
-                    }}
-                    className="w-full text-left px-3.5 py-2 hover:bg-slate-50 flex items-center gap-2 text-slate-700"
-                  >
-                    <RefreshCw className="w-3.5 h-3.5 text-teal-600" />
-                    <span>ต่อเวลาเซสชัน (รีเซ็ต 15 นาที)</span>
-                  </button>
+                  {sessionRemainingSeconds > 0 ? (
+                    <>
+                      <button
+                        onClick={() => {
+                          onResetSession();
+                          setSessionDropdownOpen(false);
+                        }}
+                        className="w-full text-left px-3.5 py-2 hover:bg-slate-50 flex items-center gap-2 text-slate-700"
+                      >
+                        <RefreshCw className="w-3.5 h-3.5 text-teal-600" />
+                        <span>ต่อเวลาเซสชัน (รีเซ็ต 15 นาที)</span>
+                      </button>
 
-                  <button
-                    onClick={() => {
-                      onSimulateExpireInFiveSeconds();
-                      setSessionDropdownOpen(false);
-                    }}
-                    className="w-full text-left px-3.5 py-2 hover:bg-amber-50 flex items-center gap-2 text-amber-800"
-                  >
-                    <Clock className="w-3.5 h-3.5 text-amber-600" />
-                    <span>จำลองหมดอายุใน 5 วินาที (เร็ว)</span>
-                  </button>
+                      <button
+                        onClick={() => {
+                          onSimulateExpireInFiveSeconds();
+                          setSessionDropdownOpen(false);
+                        }}
+                        className="w-full text-left px-3.5 py-2 hover:bg-amber-50 flex items-center gap-2 text-amber-800"
+                      >
+                        <Clock className="w-3.5 h-3.5 text-amber-600" />
+                        <span>จำลองหมดอายุใน 5 วินาที (เร็ว)</span>
+                      </button>
 
-                  <button
-                    onClick={() => {
-                      onExpireSessionNow();
-                      setSessionDropdownOpen(false);
-                    }}
-                    className="w-full text-left px-3.5 py-2 hover:bg-red-50 flex items-center gap-2 text-red-600 font-medium"
-                  >
-                    <AlertCircle className="w-3.5 h-3.5 text-red-600" />
-                    <span>บังคับเซสชันหมดอายุทันที (Expire Now)</span>
-                  </button>
+                      <button
+                        onClick={() => {
+                          onExpireSessionNow();
+                          setSessionDropdownOpen(false);
+                        }}
+                        className="w-full text-left px-3.5 py-2 hover:bg-red-50 flex items-center gap-2 text-red-600 font-medium"
+                      >
+                        <AlertCircle className="w-3.5 h-3.5 text-red-600" />
+                        <span>บังคับเซสชันหมดอายุทันที (Expire Now)</span>
+                      </button>
+                    </>
+                  ) : (
+                    <div className="px-3.5 py-2 space-y-2">
+                      <div className="text-[11px] text-red-600 font-semibold">
+                        เซสชันหมดอายุแล้ว ไม่สามารถต่อเวลาหรือเข้าถึงข้อมูลเดิมได้ กรุณาเข้าสู่ระบบใหม่
+                      </div>
+                      <button
+                        onClick={() => {
+                          setSessionDropdownOpen(false);
+                          onLogout();
+                        }}
+                        className="w-full px-3 py-1.5 bg-teal-600 hover:bg-teal-700 text-white rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5"
+                      >
+                        <LogOut className="w-3.5 h-3.5" />
+                        <span>ไปหน้าเข้าสู่ระบบใหม่ (Mock Login)</span>
+                      </button>
+                    </div>
+                  )}
                 </div>
               </div>
             )}
