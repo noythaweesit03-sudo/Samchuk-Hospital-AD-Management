@@ -493,7 +493,7 @@ public class LdapsReadService : IDirectoryReadService
         int maxEntriesToFetch,
         int ldapControlPageSize,
         CancellationToken cancellationToken,
-        SortKey? serverSideSortKey = null)
+        System.DirectoryServices.Protocols.SortKey? serverSideSortKey = null)
     {
         EnsureLiveConnectionAllowedOrThrow(cancellationToken);
 
@@ -527,7 +527,10 @@ public class LdapsReadService : IDirectoryReadService
 
         if (serverSideSortKey != null)
         {
-            var sortControl = new SortRequestControl(serverSideSortKey) { IsCritical = false };
+            var sortControl = new SortRequestControl(new System.DirectoryServices.Protocols.SortKey[] { serverSideSortKey })
+            {
+                IsCritical = false
+            };
             searchRequest.Controls.Add(sortControl);
         }
 
@@ -688,7 +691,7 @@ public class LdapsReadService : IDirectoryReadService
             "department" => "department",
             _ => "displayName"
         };
-        var serverSortKey = new SortKey(ldapSortAttribute, "2.5.13.3", isDesc);
+        var serverSortKey = new System.DirectoryServices.Protocols.SortKey(ldapSortAttribute, "2.5.13.3", isDesc);
 
         var (entries, hasMoreBeyondWindow) = ExecuteBoundedPagedSearch(
             _options.SearchBase,
@@ -740,7 +743,7 @@ public class LdapsReadService : IDirectoryReadService
             _options.GetEffectiveMaxResultWindow());
 
         var filter = LdapFilterSanitizer.BuildComputerSearchFilter(query);
-        var serverSortKey = new SortKey("cn", "2.5.13.3", false);
+        var serverSortKey = new System.DirectoryServices.Protocols.SortKey("cn", "2.5.13.3", false);
 
         var (entries, hasMoreBeyondWindow) = ExecuteBoundedPagedSearch(
             _options.SearchBase,
