@@ -25,6 +25,7 @@ export const ComputersView: React.FC = () => {
   const [totalCount, setTotalCount] = useState<number>(0);
   const [totalPages, setTotalPages] = useState<number>(1);
   const [loading, setLoading] = useState<boolean>(true);
+  const [error, setError] = useState<string | null>(null);
 
   const [search, setSearch] = useState<string>('');
   const [osFilter, setOsFilter] = useState<string>('All');
@@ -36,6 +37,7 @@ export const ComputersView: React.FC = () => {
 
   const loadComputers = async () => {
     setLoading(true);
+    setError(null);
     try {
       const options: ComputerFilterOptions = {
         search,
@@ -48,8 +50,9 @@ export const ComputersView: React.FC = () => {
       setComputers(result.items);
       setTotalCount(result.totalCount);
       setTotalPages(result.totalPages);
-    } catch (err) {
+    } catch (err: any) {
       console.error(err);
+      setError(err?.message || 'เกิดข้อผิดพลาดในการโหลดข้อมูลคอมพิวเตอร์');
     } finally {
       setLoading(false);
     }
@@ -163,16 +166,51 @@ export const ComputersView: React.FC = () => {
               {loading ? (
                 <tr>
                   <td colSpan={6} className="py-12 text-center text-slate-500">
-                    <div className="flex items-center justify-center gap-2">
-                      <div className="w-4 h-4 border-2 border-teal-600 border-t-transparent rounded-full animate-spin" />
-                      <span>กำลังโหลดรายการคอมพิวเตอร์...</span>
+                    <div className="flex flex-col items-center justify-center gap-2">
+                      <div className="w-5 h-5 border-2 border-teal-600 border-t-transparent rounded-full animate-spin" />
+                      <span className="font-medium text-slate-600">กำลังโหลดรายการคอมพิวเตอร์ Active Directory...</span>
+                    </div>
+                  </td>
+                </tr>
+              ) : error ? (
+                <tr>
+                  <td colSpan={6} className="py-10 px-4 text-center bg-rose-50/50">
+                    <div className="flex flex-col items-center justify-center gap-2 max-w-md mx-auto">
+                      <ShieldAlert className="w-8 h-8 text-rose-500" />
+                      <div className="font-semibold text-rose-900 text-sm">ไม่สามารถโหลดข้อมูลคอมพิวเตอร์ได้</div>
+                      <p className="text-xs text-rose-700">{error}</p>
+                      <button
+                        onClick={loadComputers}
+                        className="mt-2 px-3.5 py-1.5 bg-rose-600 hover:bg-rose-700 text-white rounded-lg text-xs font-semibold shadow-xs transition-colors"
+                      >
+                        ลองใหม่อีกครั้ง (Retry)
+                      </button>
                     </div>
                   </td>
                 </tr>
               ) : computers.length === 0 ? (
                 <tr>
-                  <td colSpan={6} className="py-12 text-center text-slate-500">
-                    ไม่พบข้อมูลคอมพิวเตอร์ตามเงื่อนไข
+                  <td colSpan={6} className="py-12 px-4 text-center text-slate-500">
+                    <div className="flex flex-col items-center justify-center gap-2 max-w-sm mx-auto">
+                      <Monitor className="w-8 h-8 text-slate-300" />
+                      <div className="font-semibold text-slate-700 text-sm">ไม่พบข้อมูลคอมพิวเตอร์</div>
+                      <p className="text-xs text-slate-500">
+                        ไม่พบคอมพิวเตอร์หรือเซิร์ฟเวอร์ที่ตรงกับเงื่อนไขการค้นหา
+                      </p>
+                      {(search || osFilter !== 'All' || statusFilter !== 'All') && (
+                        <button
+                          onClick={() => {
+                            setSearch('');
+                            setOsFilter('All');
+                            setStatusFilter('All');
+                            setPageNumber(1);
+                          }}
+                          className="mt-2 px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-medium border border-slate-300 transition-colors"
+                        >
+                          ล้างตัวกรองทั้งหมด
+                        </button>
+                      )}
+                    </div>
                   </td>
                 </tr>
               ) : (

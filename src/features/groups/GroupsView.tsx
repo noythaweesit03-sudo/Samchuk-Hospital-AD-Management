@@ -10,23 +10,32 @@ import {
   ExternalLink, 
   X,
   Info,
-  Network
+  Network,
+  UserPlus
 } from 'lucide-react';
 import { AdGroup, GroupScope, GroupType } from '../../types/ad';
 import { directoryApi, GroupFilterOptions } from '../../services/directoryApi';
+import { ActionPlannedModal } from '../../components/common/ActionPlannedModal';
 
 export const GroupsView: React.FC = () => {
   const [groups, setGroups] = useState<AdGroup[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
   const [search, setSearch] = useState('');
   const [scopeFilter, setScopeFilter] = useState('All');
   const [typeFilter, setTypeFilter] = useState('All');
 
   const [selectedGroup, setSelectedGroup] = useState<AdGroup | null>(null);
+  const [plannedAction, setPlannedAction] = useState<{
+    isOpen: boolean;
+    title: string;
+    targetName?: string;
+  }>({ isOpen: false, title: '' });
 
   const loadGroups = async () => {
     setLoading(true);
+    setError(null);
     try {
       const options: GroupFilterOptions = {
         search,
@@ -35,8 +44,9 @@ export const GroupsView: React.FC = () => {
       };
       const data = await directoryApi.getGroups(options);
       setGroups(data);
-    } catch (err) {
+    } catch (err: any) {
       console.error(err);
+      setError(err?.message || 'เกิดข้อผิดพลาดในการโหลดข้อมูลกลุ่มสิทธิ์ความปลอดภัย');
     } finally {
       setLoading(false);
     }
@@ -107,12 +117,47 @@ export const GroupsView: React.FC = () => {
       {/* Grid of Groups */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
         {loading ? (
-          <div className="col-span-full py-12 text-center text-xs text-slate-400">
-            กำลังโหลดข้อมูลกลุ่มสิทธิ์...
+          <div className="col-span-full py-16 text-center text-slate-500 bg-white rounded-xl border border-slate-200">
+            <div className="flex flex-col items-center justify-center gap-2">
+              <div className="w-5 h-5 border-2 border-teal-600 border-t-transparent rounded-full animate-spin" />
+              <span className="font-medium text-slate-600 text-xs">กำลังโหลดข้อมูลกลุ่มสิทธิ์ความปลอดภัย Active Directory...</span>
+            </div>
+          </div>
+        ) : error ? (
+          <div className="col-span-full py-12 px-4 text-center bg-rose-50/50 rounded-xl border border-rose-200">
+            <div className="flex flex-col items-center justify-center gap-2 max-w-md mx-auto">
+              <ShieldCheck className="w-8 h-8 text-rose-500" />
+              <div className="font-semibold text-rose-900 text-sm">ไม่สามารถโหลดข้อมูลกลุ่มสิทธิ์ได้</div>
+              <p className="text-xs text-rose-700">{error}</p>
+              <button
+                onClick={loadGroups}
+                className="mt-2 px-3.5 py-1.5 bg-rose-600 hover:bg-rose-700 text-white rounded-lg text-xs font-semibold shadow-xs transition-colors"
+              >
+                ลองใหม่อีกครั้ง (Retry)
+              </button>
+            </div>
           </div>
         ) : groups.length === 0 ? (
-          <div className="col-span-full py-12 text-center text-xs text-slate-400">
-            ไม่พบกลุ่มสิทธิ์ตามเงื่อนไขที่กำหนด
+          <div className="col-span-full py-16 px-4 text-center text-slate-500 bg-white rounded-xl border border-slate-200">
+            <div className="flex flex-col items-center justify-center gap-2 max-w-sm mx-auto">
+              <UsersRound className="w-8 h-8 text-slate-300" />
+              <div className="font-semibold text-slate-700 text-sm">ไม่พบกลุ่มสิทธิ์</div>
+              <p className="text-xs text-slate-500">
+                ไม่พบกลุ่มความปลอดภัยหรือกลุ่มกระจายข้อมูลตามเงื่อนไขตัวกรอง
+              </p>
+              {(search || scopeFilter !== 'All' || typeFilter !== 'All') && (
+                <button
+                  onClick={() => {
+                    setSearch('');
+                    setScopeFilter('All');
+                    setTypeFilter('All');
+                  }}
+                  className="mt-2 px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-medium border border-slate-300 transition-colors"
+                >
+                  ล้างตัวกรองทั้งหมด
+                </button>
+              )}
+            </div>
           </div>
         ) : (
           groups.map((group) => (
@@ -256,7 +301,22 @@ export const GroupsView: React.FC = () => {
 
             </div>
 
-            <div className="bg-slate-50 border-t border-slate-200 p-4 flex justify-end">
+            <div className="bg-slate-50 border-t border-slate-200 p-4 flex items-center justify-between gap-3">
+              <button
+                onClick={() => setPlannedAction({
+                  isOpen: true,
+                  title: 'แก้ไขสมาชิกกลุ่ม (Group Membership Changes)',
+                  targetName: selectedGroup.sAMAccountName
+                })}
+                className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-300 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-colors"
+                title="ปุ่มนี้ล็อกไว้สำหรับ Phase 4 (ไม่มีการเขียนข้อมูล AD ใน Phase 1)"
+              >
+                <UserPlus className="w-3.5 h-3.5 text-slate-500" />
+                <span>จัดการสมาชิกกลุ่ม</span>
+                <span className="text-[10px] bg-amber-500/20 text-amber-800 font-bold px-1.5 py-0.2 rounded border border-amber-500/30">
+                  Phase 4 Planned
+                </span>
+              </button>
               <button
                 onClick={() => setSelectedGroup(null)}
                 className="px-4 py-1.5 bg-slate-800 hover:bg-slate-900 text-white rounded-lg text-xs font-semibold"
@@ -267,6 +327,15 @@ export const GroupsView: React.FC = () => {
           </div>
         </div>
       )}
+
+      {/* Action Planned Modal (Zero AD Write Safety Guard) */}
+      <ActionPlannedModal
+        isOpen={plannedAction.isOpen}
+        onClose={() => setPlannedAction({ isOpen: false, title: '' })}
+        actionTitle={plannedAction.title}
+        targetName={plannedAction.targetName}
+        actionType="edit"
+      />
     </div>
   );
 };

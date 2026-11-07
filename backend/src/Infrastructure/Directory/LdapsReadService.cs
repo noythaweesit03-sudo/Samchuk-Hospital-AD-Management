@@ -41,13 +41,24 @@ public class LdapsReadService : IDirectoryReadService
         connection.SessionOptions.ProtocolVersion = 3;
 
         // Strict TLS Certificate validation - Never accept untrusted or invalid certificates!
+        // Includes CA Root Chain validation and Target Server Hostname verification
         connection.SessionOptions.VerifyServerCertificate = (conn, cert) =>
         {
             if (cert == null) return false;
             var x509 = new X509Certificate2(cert);
+
+            // Strict Hostname Verification: Verify that the certificate Common Name or SAN matches the serverAddress
+            var certHost = x509.GetNameInfo(X509NameType.DnsName, false);
+            if (!string.IsNullOrEmpty(certHost) && 
+                !string.Equals(certHost, serverAddress, StringComparison.OrdinalIgnoreCase))
+            {
+                return false;
+            }
+
             using var chain = new X509Chain();
             chain.ChainPolicy.RevocationMode = X509RevocationMode.Online;
             chain.ChainPolicy.RevocationFlag = X509RevocationFlag.ExcludeRoot;
+            chain.ChainPolicy.VerificationFlags = X509VerificationFlags.NoFlag;
             return chain.Build(x509);
         };
 

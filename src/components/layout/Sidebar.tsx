@@ -10,22 +10,26 @@ import {
   Server, 
   ShieldCheck, 
   Lock,
-  ExternalLink
+  ExternalLink,
+  X
 } from 'lucide-react';
 import { CurrentUser } from '../../types/ad';
-
 import { hasPageAccess, PAGE_PERMISSIONS } from '../../utils/rbac';
 
 interface SidebarProps {
   currentPage: string;
   onNavigate: (page: string) => void;
   currentUser: CurrentUser;
+  isMobileOpen?: boolean;
+  onCloseMobile?: () => void;
 }
 
 export const Sidebar: React.FC<SidebarProps> = ({
   currentPage,
   onNavigate,
   currentUser,
+  isMobileOpen = false,
+  onCloseMobile,
 }) => {
   const navItems = [
     {
@@ -72,13 +76,31 @@ export const Sidebar: React.FC<SidebarProps> = ({
     },
   ];
 
-  return (
-    <aside className="w-64 bg-slate-900 text-slate-300 flex flex-col shrink-0 min-h-[calc(100vh-65px)]">
+  const handleItemClick = (pageId: string) => {
+    onNavigate(pageId);
+    if (onCloseMobile) {
+      onCloseMobile();
+    }
+  };
+
+  const navContent = (
+    <div className="flex flex-col h-full bg-slate-900 text-slate-300">
       {/* Scope Reminder */}
       <div className="p-3 bg-slate-800/80 border-b border-slate-700/60 text-xs">
-        <div className="flex items-center gap-2 text-teal-400 font-semibold text-[11px] uppercase tracking-wider">
-          <Server className="w-3.5 h-3.5" />
-          <span>ขอบเขต: AD Management Only</span>
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2 text-teal-400 font-semibold text-[11px] uppercase tracking-wider">
+            <Server className="w-3.5 h-3.5" />
+            <span>ขอบเขต: AD Management Only</span>
+          </div>
+          {onCloseMobile && (
+            <button
+              onClick={onCloseMobile}
+              className="md:hidden text-slate-400 hover:text-white p-1 rounded-lg"
+              aria-label="ปิดเมนู"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          )}
         </div>
         <p className="text-[11px] text-slate-400 mt-1 leading-snug">
           แยกอิสระจาก Gateway, IIS, Procurement, Sam_Att, Cash_Cheque และ FortiGate
@@ -100,7 +122,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
           return (
             <button
               key={item.id}
-              onClick={() => onNavigate(item.id)}
+              onClick={() => handleItemClick(item.id)}
+              aria-current={isActive ? 'page' : undefined}
               className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-left text-xs font-medium transition-all ${
                 isActive
                   ? 'bg-teal-600 text-white shadow-xs'
@@ -109,15 +132,19 @@ export const Sidebar: React.FC<SidebarProps> = ({
             >
               <Icon className={`w-4 h-4 shrink-0 ${isActive ? 'text-white' : 'text-slate-400'}`} />
               <div className="flex-1 min-w-0">
-                <div className="truncate flex items-center justify-between">
-                  <span>{item.label}</span>
+                <div className="flex items-center justify-between">
+                  <span className="truncate">{item.label}</span>
                   {isRestricted && (
-                    <span className="text-[9px] font-semibold bg-amber-500/20 text-amber-300 px-1.5 py-0.2 rounded border border-amber-500/40">
-                      จำกัด
+                    <span 
+                      className="text-[9px] px-1.5 py-0.2 bg-red-950/60 text-red-300 border border-red-800/60 rounded font-semibold flex items-center gap-0.5 shrink-0 ml-1.5"
+                      title="บทบาทปัจจุบันของคุณไม่มีสิทธิ์เข้าถึงหน้านี้ (คลิกเพื่อทดสอบ HTTP 403)"
+                    >
+                      <Lock className="w-2.5 h-2.5" />
+                      403
                     </span>
                   )}
                 </div>
-                <div className={`text-[10px] truncate ${isActive ? 'text-teal-100' : 'text-slate-400'}`}>
+                <div className="text-[10px] text-slate-400 truncate mt-0.5">
                   {item.subLabel}
                 </div>
               </div>
@@ -126,45 +153,46 @@ export const Sidebar: React.FC<SidebarProps> = ({
         })}
       </nav>
 
-      {/* Bottom Service Status Box */}
-      <div className="p-3.5 m-3 bg-slate-800/90 rounded-xl border border-slate-700/80 space-y-2 text-xs">
+      {/* Role & System Status Indicator */}
+      <div className="p-3 bg-slate-950/80 border-t border-slate-800 text-[11px] text-slate-400 space-y-1.5">
         <div className="flex items-center justify-between">
-          <span className="font-semibold text-slate-200 text-[11px] flex items-center gap-1.5">
-            <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" />
-            สถานะ AD Domain
-          </span>
-          <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[9px] font-bold bg-amber-400/20 text-amber-300 border border-amber-400/40">
-            จำลอง (Mock)
-          </span>
+          <span className="text-slate-400">บทบาทปัจจุบัน:</span>
+          <span className="text-teal-400 font-semibold font-mono">{currentUser.role}</span>
         </div>
-
-        <div className="space-y-1 text-[11px] text-slate-400 font-mono">
-          <div className="flex justify-between">
-            <span>DC Server:</span>
-            <span className="text-slate-300">SH-DC01</span>
-          </div>
-          <div className="flex justify-between">
-            <span>DC OS:</span>
-            <span className="text-slate-300">Win Server 2025</span>
-          </div>
-          <div className="flex justify-between">
-            <span>IP Ref (TBD):</span>
-            <span className="text-slate-400">10.2.0.22</span>
-          </div>
-          <div className="flex justify-between">
-            <span>LDAPS Port:</span>
-            <span className="text-slate-300">636 (TLS)</span>
-          </div>
-          <div className="flex justify-between">
-            <span>Mode:</span>
-            <span className="text-emerald-400 font-sans font-medium">Read-Only Phase 1</span>
-          </div>
+        <div className="flex items-center justify-between">
+          <span className="text-slate-400">โหมดการทำงาน:</span>
+          <span className="text-amber-400 font-semibold font-mono">Phase 1 Mock</span>
         </div>
-
-        <div className="pt-1.5 border-t border-slate-700/70 text-[10px] text-slate-400 text-center">
-          ระบบจะไม่ส่งคำสั่งแก้ไขไปยัง AD จนกว่าจะผ่านการทดสอบใน Phase 4
+        <div className="flex items-center justify-between text-[10px] text-slate-500 pt-1 border-t border-slate-800/60">
+          <span>Target DC:</span>
+          <span className="font-mono">10.2.0.22 (Ref)</span>
         </div>
       </div>
-    </aside>
+    </div>
+  );
+
+  return (
+    <>
+      {/* Desktop Sidebar (hidden on mobile, visible on md and up) */}
+      <aside className="hidden md:flex w-64 shrink-0 min-h-[calc(100vh-65px)] border-r border-slate-800">
+        {navContent}
+      </aside>
+
+      {/* Mobile Drawer (visible on mobile when open) */}
+      {isMobileOpen && (
+        <div className="fixed inset-0 z-40 md:hidden flex animate-in fade-in duration-200">
+          {/* Backdrop */}
+          <div 
+            className="fixed inset-0 bg-slate-950/70 backdrop-blur-xs" 
+            onClick={onCloseMobile}
+            aria-label="ปิดเมนู"
+          />
+          {/* Drawer */}
+          <aside className="relative w-72 max-w-[85vw] h-full shadow-2xl z-50 animate-in slide-in-from-left duration-200">
+            {navContent}
+          </aside>
+        </div>
+      )}
+    </>
   );
 };

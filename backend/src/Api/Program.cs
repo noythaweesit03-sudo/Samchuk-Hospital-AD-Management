@@ -1,3 +1,5 @@
+using Microsoft.AspNetCore.Authentication;
+using SamchukHospital.AdManagement.Api.Security;
 using SamchukHospital.AdManagement.Application.Common.Interfaces;
 using SamchukHospital.AdManagement.Infrastructure.Audit;
 using SamchukHospital.AdManagement.Infrastructure.Directory;
@@ -35,31 +37,16 @@ builder.Services.AddSingleton<IDirectoryReadService, LdapReadServiceMock>();
 builder.Services.AddSingleton<IAuditLogRepository, InMemoryAuditLogRepository>();
 
 // =========================================================================
-// PHASE 2 & 3 AUTHENTICATION / AUTHORIZATION DESIGN:
+// MOCK AUTHENTICATION & POLICY-BASED RBAC (Phase 1 Testing / Phase 2 Design):
 // =========================================================================
-// In Phase 1 Mock mode, backend RBAC is NOT enforced; mock data is returned directly.
-// For Phase 2/3 live deployment, authentication must be activated via:
-//
-// 1. Windows Authentication (Negotiate / Kerberos) on Hospital Intranet:
-//    builder.Services.AddAuthentication(NegotiateDefaults.AuthenticationScheme)
-//                   .AddNegotiate();
-//
-// 2. OR Enterprise Hospital OIDC/JWT Bearer Token:
-//    builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
-//                   .AddJwtBearer(options => {
-//                       options.Authority = builder.Configuration["Authentication:Authority"];
-//                       options.Audience = "samchuk-ad-mgmt";
-//                   });
-//
-// 3. Claims Transformation to UserRole (Viewer, Helpdesk, ADOperator, SecurityAuditor, SystemAdministrator):
-//    builder.Services.AddTransient<IClaimsTransformation, HospitalAdRoleClaimsTransformation>();
-//
-// 4. Role Authorization Policies:
-//    builder.Services.AddAuthorization(options => {
-//        options.AddPolicy("AuditorOnly", policy => policy.RequireRole("SecurityAuditor", "SystemAdministrator"));
-//        options.AddPolicy("ConfigAccess", policy => policy.RequireRole("ADOperator", "SecurityAuditor", "SystemAdministrator"));
-//    });
-//
+if (builder.Environment.IsDevelopment() || builder.Environment.IsEnvironment("Test"))
+{
+    builder.Services.AddAuthentication(DemoAuthenticationHandler.SchemeName)
+                    .AddScheme<AuthenticationSchemeOptions, DemoAuthenticationHandler>(
+                        DemoAuthenticationHandler.SchemeName, _ => { });
+    builder.Services.AddHospitalAdAuthorization();
+}
+
 // CRITICAL SECURITY GUARD: IDirectoryWriteService is intentionally NOT registered!
 // This guarantees zero write capabilities in Phase 1.
 // =========================================================================
@@ -86,19 +73,19 @@ app.Use(async (context, next) =>
     await next();
 });
 
-// PRODUCTION SECURITY GUARD (Directive 5):
+// STRICT PRODUCTION SECURITY GUARD (Task 1 Hardening):
 // Prohibits exposing unauthenticated Phase 1 Mock endpoints to production network.
+// Override capability has been completely removed to prevent accidental exposure.
 if (!app.Environment.IsDevelopment())
 {
     app.Use(async (context, next) =>
     {
-        var allowMockInProd = app.Configuration.GetValue<bool>("Security:AllowUnauthenticatedMockInProduction", false);
         var isAuthenticated = context.User.Identity?.IsAuthenticated ?? false;
 
-        if (!allowMockInProd && !isAuthenticated && context.Request.Path.StartsWithSegments("/api"))
+        if (!isAuthenticated && context.Request.Path.StartsWithSegments("/api"))
         {
             // Allow health check endpoint only
-            if (context.Request.Path.StartsWithSegments("/api/health"))
+            if (context.Request.Path.StartsWithSegments("/api/health") || context.Request.Path.StartsWithSegments("/health"))
             {
                 await next();
                 return;
@@ -108,7 +95,7 @@ if (!app.Environment.IsDevelopment())
             context.Response.ContentType = "application/json";
             await context.Response.WriteAsJsonAsync(new
             {
-                error = "Unauthenticated Phase 1 Mock endpoints are forbidden in Production. Access requires Phase 2/3 Enterprise Authentication.",
+                error = "Phase 1 Mock endpoints are strictly forbidden in Production without enterprise authentication. No overrides permitted.",
                 code = "PRODUCTION_MOCK_FORBIDDEN",
                 requestId = context.TraceIdentifier,
                 timestampUtc = DateTime.UtcNow
@@ -120,6 +107,7 @@ if (!app.Environment.IsDevelopment())
     });
 }
 
+app.UseAuthentication();
 app.UseAuthorization();
 app.MapControllers();
 

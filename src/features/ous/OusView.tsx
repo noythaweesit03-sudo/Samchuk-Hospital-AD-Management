@@ -23,23 +23,27 @@ export const OusView: React.FC = () => {
     'ou-root-samchuk': true,
   });
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  const loadOus = async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const data = await directoryApi.getOuTree();
+      setOuTree(data);
+      if (data.length > 0 && !selectedOu) {
+        setSelectedOu(data[0]);
+      }
+    } catch (err: any) {
+      console.error(err);
+      setError(err?.message || 'เกิดข้อผิดพลาดในการโหลดโครงสร้างไดเรกทอรี OU');
+    } finally {
+      setLoading(false);
+    }
+  };
 
   useEffect(() => {
-    const load = async () => {
-      setLoading(true);
-      try {
-        const data = await directoryApi.getOuTree();
-        setOuTree(data);
-        if (data.length > 0) {
-          setSelectedOu(data[0]);
-        }
-      } catch (err) {
-        console.error(err);
-      } finally {
-        setLoading(false);
-      }
-    };
-    load();
+    loadOus();
   }, []);
 
   const toggleExpand = (id: string, e: React.MouseEvent) => {
@@ -142,7 +146,30 @@ export const OusView: React.FC = () => {
           </div>
 
           {loading ? (
-            <div className="py-8 text-center text-xs text-slate-400">กำลังโหลดผังไดเรกทอรี...</div>
+            <div className="py-12 text-center text-xs text-slate-500">
+              <div className="flex flex-col items-center justify-center gap-2">
+                <div className="w-5 h-5 border-2 border-teal-600 border-t-transparent rounded-full animate-spin" />
+                <span>กำลังโหลดผังไดเรกทอรี OU...</span>
+              </div>
+            </div>
+          ) : error ? (
+            <div className="py-8 px-3 text-center bg-rose-50/50 rounded-lg border border-rose-200">
+              <div className="flex flex-col items-center justify-center gap-1.5 max-w-xs mx-auto">
+                <AlertCircle className="w-6 h-6 text-rose-500" />
+                <span className="font-semibold text-rose-900 text-xs">โหลดโครงสร้าง OU ไม่สำเร็จ</span>
+                <p className="text-[11px] text-rose-700">{error}</p>
+                <button
+                  onClick={loadOus}
+                  className="mt-2 px-3 py-1 bg-rose-600 hover:bg-rose-700 text-white rounded text-xs font-semibold"
+                >
+                  ลองใหม่อีกครั้ง
+                </button>
+              </div>
+            </div>
+          ) : ouTree.length === 0 ? (
+            <div className="py-8 text-center text-xs text-slate-400">
+              ไม่พบโครงสร้างหน่วยงาน OU ในระบบ
+            </div>
           ) : (
             renderTreeNodes(ouTree)
           )}

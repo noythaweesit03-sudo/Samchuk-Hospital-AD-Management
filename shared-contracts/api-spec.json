@@ -71,16 +71,52 @@
         "responses": { "200": { "description": "Paged list of computers" } }
       }
     },
+    "/computers/{id}": {
+      "get": {
+        "summary": "Get computer details by ID or hostname",
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": { "description": "Computer details" },
+          "404": { "description": "Computer not found" }
+        }
+      }
+    },
     "/ous/tree": {
       "get": {
         "summary": "Retrieve hierarchical OU tree",
         "responses": { "200": { "description": "Tree of organizational units" } }
       }
     },
+    "/ous/{id}": {
+      "get": {
+        "summary": "Get OU details by ID or GUID",
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": { "description": "OU details" },
+          "404": { "description": "OU not found" }
+        }
+      }
+    },
     "/groups": {
       "get": {
         "summary": "Retrieve AD security and distribution groups",
         "responses": { "200": { "description": "List of groups" } }
+      }
+    },
+    "/groups/{id}": {
+      "get": {
+        "summary": "Get group details by ID or sAMAccountName",
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": { "description": "Group details" },
+          "404": { "description": "Group not found" }
+        }
       }
     },
     "/audit": {

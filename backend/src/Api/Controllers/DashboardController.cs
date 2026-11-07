@@ -1,18 +1,18 @@
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using SamchukHospital.AdManagement.Api.Models;
+using SamchukHospital.AdManagement.Api.Security;
 using SamchukHospital.AdManagement.Application.Common.Interfaces;
 
 namespace SamchukHospital.AdManagement.Api.Controllers;
 
 /// <summary>
 /// Dashboard Overview Controller.
-/// 
-/// AUTHENTICATION & AUTHORIZATION DESIGN (PHASE 2):
-/// [Authorize(Roles = "Viewer,Helpdesk,ADOperator,SecurityAuditor,SystemAdministrator")]
-/// NOTE: In Phase 1 Mock-Only mode, this endpoint returns synthetic mock summary data.
-/// Production RBAC and server-side claims validation will be enforced upon Phase 2/3 activation.
+/// Accessible to Viewer, Helpdesk, ADOperator, SecurityAuditor, SystemAdministrator.
+/// In Phase 1 Mock-Only mode, this endpoint returns synthetic mock summary data.
 /// </summary>
 [ApiController]
+[Authorize(Policy = AuthorizationPolicies.ViewerOrAbove)]
 [Route("api/[controller]")]
 public class DashboardController : ControllerBase
 {

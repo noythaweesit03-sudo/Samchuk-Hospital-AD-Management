@@ -86,7 +86,9 @@ export const SettingsView: React.FC = () => {
         <div className="flex items-center justify-between border-b border-slate-100 pb-3">
           <div className="flex items-center gap-2">
             <Network className="w-4 h-4 text-teal-600" />
-            <h2 className="text-sm font-bold text-slate-800">แผนผังสถาปัตยกรรมระบบ (System Architecture Topology)</h2>
+            <h2 className="text-sm font-bold text-slate-800">
+              แผนผังสถาปัตยกรรม Option A: Independent AD Management (ระบบอิสระ)
+            </h2>
           </div>
           <span className="text-[11px] font-mono text-slate-500">
             Strict Separation from Central Gateway & FortiGate

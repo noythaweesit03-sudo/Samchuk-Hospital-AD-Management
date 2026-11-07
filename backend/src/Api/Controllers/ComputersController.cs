@@ -1,5 +1,7 @@
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using SamchukHospital.AdManagement.Api.Models;
+using SamchukHospital.AdManagement.Api.Security;
 using SamchukHospital.AdManagement.Application.Common.Interfaces;
 using SamchukHospital.AdManagement.Domain.Entities;
 
@@ -7,11 +9,10 @@ namespace SamchukHospital.AdManagement.Api.Controllers;
 
 /// <summary>
 /// Active Directory Computers & Servers Controller.
-/// 
-/// AUTHENTICATION & AUTHORIZATION DESIGN (PHASE 2):
-/// [Authorize(Roles = "Viewer,Helpdesk,ADOperator,SecurityAuditor,SystemAdministrator")]
+/// Accessible to Viewer, Helpdesk, ADOperator, SecurityAuditor, SystemAdministrator.
 /// </summary>
 [ApiController]
+[Authorize(Policy = AuthorizationPolicies.ViewerOrAbove)]
 [Route("api/[controller]")]
 public class ComputersController : ControllerBase
 {

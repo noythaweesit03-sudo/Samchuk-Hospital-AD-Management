@@ -1,5 +1,7 @@
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using SamchukHospital.AdManagement.Api.Models;
+using SamchukHospital.AdManagement.Api.Security;
 using SamchukHospital.AdManagement.Application.Common.Interfaces;
 using SamchukHospital.AdManagement.Domain.Entities;
 
@@ -7,13 +9,12 @@ namespace SamchukHospital.AdManagement.Api.Controllers;
 
 /// <summary>
 /// Active Directory Users Controller.
-/// 
-/// AUTHENTICATION & AUTHORIZATION DESIGN (PHASE 2):
-/// [Authorize(Roles = "Viewer,Helpdesk,ADOperator,SecurityAuditor,SystemAdministrator")]
-/// NOTE: In Phase 1 Mock-Only mode, this endpoint returns synthetic mock user records.
+/// Accessible to Viewer, Helpdesk, ADOperator, SecurityAuditor, SystemAdministrator.
+/// In Phase 1 Mock-Only mode, this endpoint returns synthetic mock user records.
 /// Write operations (create, update, unlock, reset password) are strictly not implemented in Phase 1.
 /// </summary>
 [ApiController]
+[Authorize(Policy = AuthorizationPolicies.ViewerOrAbove)]
 [Route("api/[controller]")]
 public class UsersController : ControllerBase
 {

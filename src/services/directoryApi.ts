@@ -1,6 +1,9 @@
 /**
  * Samchuk Hospital AD Management - API Contract and Service Abstraction
- * Defines IDirectoryApi interface, MockDirectoryApi (Phase 1), and reserved HttpDirectoryApi (Phase 2).
+ * Phase 1.5: Frontend & Backend Integration Readiness
+ * 
+ * Defines IDirectoryApi interface, MockDirectoryApi (Phase 1 default),
+ * and HttpDirectoryApi with Correlation ID, Timeout, and Error Handling.
  */
 
 import { 
@@ -53,7 +56,34 @@ export interface AuditFilterOptions {
   pageSize?: number;
 }
 
+export class DirectoryApiError extends Error {
+  constructor(
+    message: string,
+    public statusCode: number,
+    public errorCode: string = 'DIRECTORY_API_ERROR',
+    public requestId: string = ''
+  ) {
+    super(message);
+    this.name = 'DirectoryApiError';
+  }
+}
+
+export interface HealthStatus {
+  status: 'Healthy' | 'Degraded' | 'Unhealthy';
+  system: string;
+  environment: string;
+  mode: string;
+  activeDirectory: {
+    liveConnection: boolean;
+    writeOperations: string;
+    provider: string;
+  };
+  architecture: string;
+  timestampUtc: string;
+}
+
 export interface IDirectoryApi {
+  getHealth(): Promise<HealthStatus>;
   getDashboardSummary(): Promise<DashboardSummary>;
   getUsers(options?: UserFilterOptions): Promise<PagedResult<AdUser>>;
   getUserById(id: string): Promise<AdUser | null>;
@@ -68,7 +98,7 @@ export interface IDirectoryApi {
 
 /**
  * MockDirectoryApi:
- * Strictly simulated read-only operations using synthetic in-memory data for Phase 1.
+ * Strictly simulated read-only operations using synthetic in-memory data for Phase 1 & 1.5.
  * Guaranteed no connection to Windows Server 2025 Domain Controller or real hospital network.
  */
 export class MockDirectoryApi implements IDirectoryApi {
@@ -77,6 +107,23 @@ export class MockDirectoryApi implements IDirectoryApi {
   private ous: AdOrganizationalUnit[] = [...MOCK_OUS];
   private groups: AdGroup[] = [...MOCK_GROUPS];
   private auditLogs: AuditLogEntry[] = [...MOCK_AUDIT_LOGS];
+
+  async getHealth(): Promise<HealthStatus> {
+    await this.simulateLatency();
+    return {
+      status: 'Healthy',
+      system: 'Samchuk Hospital Active Directory Management API',
+      environment: 'Development',
+      mode: 'Mock-Only (Phase 1 Final Hardening)',
+      activeDirectory: {
+        liveConnection: false,
+        writeOperations: 'Disabled (Phase 4 Planned)',
+        provider: 'In-Memory Synthetic Mock Provider'
+      },
+      architecture: 'Option A: Independent AD Management (Isolated Application Server)',
+      timestampUtc: new Date().toISOString()
+    };
+  }
 
   async getDashboardSummary(): Promise<DashboardSummary> {
     await this.simulateLatency();
@@ -95,13 +142,15 @@ export class MockDirectoryApi implements IDirectoryApi {
 
     if (options?.search) {
       const q = options.search.toLowerCase().trim();
-      filtered = filtered.filter(u => 
-        u.displayName.toLowerCase().includes(q) ||
-        u.sAMAccountName.toLowerCase().includes(q) ||
-        u.email.toLowerCase().includes(q) ||
-        u.department.toLowerCase().includes(q) ||
-        u.employeeId.toLowerCase().includes(q)
-      );
+      if (q.length > 0) {
+        filtered = filtered.filter(u => 
+          u.displayName.toLowerCase().includes(q) ||
+          u.sAMAccountName.toLowerCase().includes(q) ||
+          u.email.toLowerCase().includes(q) ||
+          u.department.toLowerCase().includes(q) ||
+          u.employeeId.toLowerCase().includes(q)
+        );
+      }
     }
 
     if (options?.status && options.status !== 'All') {
@@ -121,8 +170,8 @@ export class MockDirectoryApi implements IDirectoryApi {
       return sortOrder === 'asc' ? valA.localeCompare(valB) : valB.localeCompare(valA);
     });
 
-    const pageNumber = options?.pageNumber || 1;
-    const pageSize = options?.pageSize || 10;
+    const pageNumber = Math.max(options?.pageNumber || 1, 1);
+    const pageSize = Math.max(options?.pageSize || 10, 1);
     const totalCount = filtered.length;
     const totalPages = Math.ceil(totalCount / pageSize) || 1;
     const startIndex = (pageNumber - 1) * pageSize;
@@ -148,11 +197,13 @@ export class MockDirectoryApi implements IDirectoryApi {
 
     if (options?.search) {
       const q = options.search.toLowerCase().trim();
-      filtered = filtered.filter(c => 
-        c.name.toLowerCase().includes(q) ||
-        c.dnsHostName.toLowerCase().includes(q) ||
-        c.departmentTag.toLowerCase().includes(q)
-      );
+      if (q.length > 0) {
+        filtered = filtered.filter(c => 
+          c.name.toLowerCase().includes(q) ||
+          c.dnsHostName.toLowerCase().includes(q) ||
+          c.departmentTag.toLowerCase().includes(q)
+        );
+      }
     }
 
     if (options?.operatingSystem && options.operatingSystem !== 'All') {
@@ -163,8 +214,8 @@ export class MockDirectoryApi implements IDirectoryApi {
       filtered = filtered.filter(c => c.status === options.status);
     }
 
-    const pageNumber = options?.pageNumber || 1;
-    const pageSize = options?.pageSize || 10;
+    const pageNumber = Math.max(options?.pageNumber || 1, 1);
+    const pageSize = Math.max(options?.pageSize || 10, 1);
     const totalCount = filtered.length;
     const totalPages = Math.ceil(totalCount / pageSize) || 1;
     const startIndex = (pageNumber - 1) * pageSize;
@@ -210,11 +261,13 @@ export class MockDirectoryApi implements IDirectoryApi {
 
     if (options?.search) {
       const q = options.search.toLowerCase().trim();
-      filtered = filtered.filter(g => 
-        g.displayName.toLowerCase().includes(q) ||
-        g.sAMAccountName.toLowerCase().includes(q) ||
-        g.description.toLowerCase().includes(q)
-      );
+      if (q.length > 0) {
+        filtered = filtered.filter(g => 
+          g.displayName.toLowerCase().includes(q) ||
+          g.sAMAccountName.toLowerCase().includes(q) ||
+          g.description.toLowerCase().includes(q)
+        );
+      }
     }
 
     if (options?.scope && options.scope !== 'All') {
@@ -250,8 +303,8 @@ export class MockDirectoryApi implements IDirectoryApi {
       filtered = filtered.filter(l => l.result === options.result);
     }
 
-    const pageNumber = options?.pageNumber || 1;
-    const pageSize = options?.pageSize || 10;
+    const pageNumber = Math.max(options?.pageNumber || 1, 1);
+    const pageSize = Math.max(options?.pageSize || 10, 1);
     const totalCount = filtered.length;
     const totalPages = Math.ceil(totalCount / pageSize) || 1;
     const startIndex = (pageNumber - 1) * pageSize;
@@ -274,15 +327,78 @@ export class MockDirectoryApi implements IDirectoryApi {
 
 /**
  * HttpDirectoryApi:
- * Reserved for Phase 2 when ASP.NET Core Web API is compiled and deployed on the Application Server.
- * Communicates with backend endpoints (/api/users, /api/computers, etc.) via reverse proxy.
+ * Production-ready HTTP client communicating with ASP.NET Core Web API (/api/*).
+ * Includes timeout cancellation, correlation ID injection, and structured error handling.
  */
 export class HttpDirectoryApi implements IDirectoryApi {
-  constructor(private baseUrl: string = '/api') {}
+  constructor(
+    private baseUrl: string = '/api',
+    private timeoutMs: number = 10000
+  ) {}
+
+  private async fetchWithTimeout(url: string, options: RequestInit = {}): Promise<Response> {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), this.timeoutMs);
+    const correlationId = 'req-' + Math.random().toString(36).substring(2, 10);
+
+    const headers: Record<string, string> = {
+      'Accept': 'application/json',
+      'X-Correlation-ID': correlationId,
+      ...(options.headers as Record<string, string> || {}),
+    };
+
+    try {
+      const res = await fetch(url, {
+        ...options,
+        headers,
+        signal: controller.signal,
+      });
+
+      if (!res.ok) {
+        let errorMsg = `HTTP Error ${res.status}`;
+        let errorCode = 'SERVER_ERROR';
+        let reqId = correlationId;
+
+        try {
+          const errorBody = await res.json();
+          if (errorBody.message) errorMsg = errorBody.message;
+          else if (errorBody.error) errorMsg = errorBody.error;
+          
+          if (errorBody.errorCode) errorCode = errorBody.errorCode;
+          else if (errorBody.code) errorCode = errorBody.code;
+
+          if (errorBody.requestId) reqId = errorBody.requestId;
+        } catch {
+          // Fall back to HTTP status text
+          errorMsg = res.statusText || errorMsg;
+        }
+
+        throw new DirectoryApiError(errorMsg, res.status, errorCode, reqId);
+      }
+
+      return res;
+    } catch (err: any) {
+      if (err.name === 'AbortError') {
+        throw new DirectoryApiError(
+          `Request timeout after ${this.timeoutMs}ms`,
+          408,
+          'REQUEST_TIMEOUT',
+          correlationId
+        );
+      }
+      throw err;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  async getHealth(): Promise<HealthStatus> {
+    const res = await this.fetchWithTimeout(`${this.baseUrl}/health`);
+    return res.json();
+  }
 
   async getDashboardSummary(): Promise<DashboardSummary> {
-    const res = await fetch(`${this.baseUrl}/dashboard/summary`);
-    if (!res.ok) throw new Error(`HTTP Error ${res.status}`);
+    const res = await this.fetchWithTimeout(`${this.baseUrl}/dashboard/summary`);
     return res.json();
   }
 
@@ -293,16 +409,25 @@ export class HttpDirectoryApi implements IDirectoryApi {
     if (options?.department) params.append('department', options.department);
     if (options?.pageNumber) params.append('pageNumber', options.pageNumber.toString());
     if (options?.pageSize) params.append('pageSize', options.pageSize.toString());
-    const res = await fetch(`${this.baseUrl}/users?${params.toString()}`);
-    if (!res.ok) throw new Error(`HTTP Error ${res.status}`);
+    if (options?.sortBy) params.append('sortBy', options.sortBy);
+    if (options?.sortOrder) params.append('sortOrder', options.sortOrder);
+
+    const queryString = params.toString();
+    const url = queryString ? `${this.baseUrl}/users?${queryString}` : `${this.baseUrl}/users`;
+    const res = await this.fetchWithTimeout(url);
     return res.json();
   }
 
   async getUserById(id: string): Promise<AdUser | null> {
-    const res = await fetch(`${this.baseUrl}/users/${encodeURIComponent(id)}`);
-    if (res.status === 404) return null;
-    if (!res.ok) throw new Error(`HTTP Error ${res.status}`);
-    return res.json();
+    try {
+      const res = await this.fetchWithTimeout(`${this.baseUrl}/users/${encodeURIComponent(id)}`);
+      return await res.json();
+    } catch (err: any) {
+      if (err instanceof DirectoryApiError && err.statusCode === 404) {
+        return null;
+      }
+      throw err;
+    }
   }
 
   async getComputers(options?: ComputerFilterOptions): Promise<PagedResult<AdComputer>> {
@@ -312,29 +437,40 @@ export class HttpDirectoryApi implements IDirectoryApi {
     if (options?.status) params.append('status', options.status);
     if (options?.pageNumber) params.append('pageNumber', options.pageNumber.toString());
     if (options?.pageSize) params.append('pageSize', options.pageSize.toString());
-    const res = await fetch(`${this.baseUrl}/computers?${params.toString()}`);
-    if (!res.ok) throw new Error(`HTTP Error ${res.status}`);
+
+    const queryString = params.toString();
+    const url = queryString ? `${this.baseUrl}/computers?${queryString}` : `${this.baseUrl}/computers`;
+    const res = await this.fetchWithTimeout(url);
     return res.json();
   }
 
   async getComputerById(id: string): Promise<AdComputer | null> {
-    const res = await fetch(`${this.baseUrl}/computers/${encodeURIComponent(id)}`);
-    if (res.status === 404) return null;
-    if (!res.ok) throw new Error(`HTTP Error ${res.status}`);
-    return res.json();
+    try {
+      const res = await this.fetchWithTimeout(`${this.baseUrl}/computers/${encodeURIComponent(id)}`);
+      return await res.json();
+    } catch (err: any) {
+      if (err instanceof DirectoryApiError && err.statusCode === 404) {
+        return null;
+      }
+      throw err;
+    }
   }
 
   async getOuTree(): Promise<AdOrganizationalUnit[]> {
-    const res = await fetch(`${this.baseUrl}/ous/tree`);
-    if (!res.ok) throw new Error(`HTTP Error ${res.status}`);
+    const res = await this.fetchWithTimeout(`${this.baseUrl}/ous/tree`);
     return res.json();
   }
 
   async getOuById(id: string): Promise<AdOrganizationalUnit | null> {
-    const res = await fetch(`${this.baseUrl}/ous/${encodeURIComponent(id)}`);
-    if (res.status === 404) return null;
-    if (!res.ok) throw new Error(`HTTP Error ${res.status}`);
-    return res.json();
+    try {
+      const res = await this.fetchWithTimeout(`${this.baseUrl}/ous/${encodeURIComponent(id)}`);
+      return await res.json();
+    } catch (err: any) {
+      if (err instanceof DirectoryApiError && err.statusCode === 404) {
+        return null;
+      }
+      throw err;
+    }
   }
 
   async getGroups(options?: GroupFilterOptions): Promise<AdGroup[]> {
@@ -342,16 +478,23 @@ export class HttpDirectoryApi implements IDirectoryApi {
     if (options?.search) params.append('search', options.search);
     if (options?.scope) params.append('scope', options.scope);
     if (options?.type) params.append('type', options.type);
-    const res = await fetch(`${this.baseUrl}/groups?${params.toString()}`);
-    if (!res.ok) throw new Error(`HTTP Error ${res.status}`);
+
+    const queryString = params.toString();
+    const url = queryString ? `${this.baseUrl}/groups?${queryString}` : `${this.baseUrl}/groups`;
+    const res = await this.fetchWithTimeout(url);
     return res.json();
   }
 
   async getGroupById(id: string): Promise<AdGroup | null> {
-    const res = await fetch(`${this.baseUrl}/groups/${encodeURIComponent(id)}`);
-    if (res.status === 404) return null;
-    if (!res.ok) throw new Error(`HTTP Error ${res.status}`);
-    return res.json();
+    try {
+      const res = await this.fetchWithTimeout(`${this.baseUrl}/groups/${encodeURIComponent(id)}`);
+      return await res.json();
+    } catch (err: any) {
+      if (err instanceof DirectoryApiError && err.statusCode === 404) {
+        return null;
+      }
+      throw err;
+    }
   }
 
   async getAuditLogs(options?: AuditFilterOptions): Promise<PagedResult<AuditLogEntry>> {
@@ -361,11 +504,34 @@ export class HttpDirectoryApi implements IDirectoryApi {
     if (options?.result) params.append('result', options.result);
     if (options?.pageNumber) params.append('pageNumber', options.pageNumber.toString());
     if (options?.pageSize) params.append('pageSize', options.pageSize.toString());
-    const res = await fetch(`${this.baseUrl}/audit?${params.toString()}`);
-    if (!res.ok) throw new Error(`HTTP Error ${res.status}`);
+
+    const queryString = params.toString();
+    const url = queryString ? `${this.baseUrl}/audit?${queryString}` : `${this.baseUrl}/audit`;
+    const res = await this.fetchWithTimeout(url);
     return res.json();
   }
 }
 
-// Default singleton instance for Phase 1
-export const directoryApi: IDirectoryApi = new MockDirectoryApi();
+/**
+ * Factory for API Client Layer (Phase 1.5):
+ * Controlled via configuration. Default is strictly 'mock' mode.
+ */
+export type ApiClientMode = 'mock' | 'http';
+
+export function createDirectoryApiClient(mode?: ApiClientMode, baseUrl?: string): IDirectoryApi {
+  // STRICT DEFAULT: Always use 'mock' unless explicitly configured as 'http'
+  const isEnvHttp = typeof import.meta !== 'undefined' && 
+                    import.meta.env && 
+                    import.meta.env.VITE_API_CLIENT_MODE === 'http';
+  const resolvedMode = mode || (isEnvHttp ? 'http' : 'mock');
+
+  if (resolvedMode === 'http') {
+    const url = baseUrl || (typeof import.meta !== 'undefined' && import.meta.env?.VITE_AD_API_URL) || '/api';
+    return new HttpDirectoryApi(url);
+  }
+
+  return new MockDirectoryApi();
+}
+
+// Default singleton instance (Strictly Mock mode in Phase 1 & 1.5)
+export const directoryApi: IDirectoryApi = createDirectoryApiClient('mock');

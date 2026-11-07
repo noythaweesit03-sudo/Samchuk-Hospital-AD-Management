@@ -28,15 +28,18 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
   const [recentAudits, setRecentAudits] = useState<AuditLogEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   const fetchData = async () => {
+    setError(null);
     try {
       const data = await directoryApi.getDashboardSummary();
       const audits = await directoryApi.getAuditLogs({ pageSize: 5 });
       setSummary(data);
       setRecentAudits(audits.items);
-    } catch (err) {
+    } catch (err: any) {
       console.error(err);
+      setError(err?.message || 'เกิดข้อผิดพลาดในการโหลดข้อมูลสรุปแดชบอร์ด');
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -52,7 +55,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
     fetchData();
   };
 
-  if (loading || !summary) {
+  if (loading && !summary) {
     return (
       <div className="p-8 space-y-6 animate-pulse">
         <div className="h-8 bg-slate-200 rounded w-1/3"></div>
@@ -65,6 +68,29 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
       </div>
     );
   }
+
+  if (error && !summary) {
+    return (
+      <div className="p-8 max-w-xl mx-auto my-12 bg-white rounded-2xl border border-rose-200 shadow-xl text-center space-y-4">
+        <div className="w-14 h-14 rounded-full bg-rose-100 text-rose-600 flex items-center justify-center mx-auto">
+          <AlertTriangle className="w-7 h-7" />
+        </div>
+        <div className="space-y-1">
+          <h2 className="text-lg font-bold text-slate-800">ไม่สามารถโหลดข้อมูลแดชบอร์ดได้</h2>
+          <p className="text-xs text-rose-600">{error}</p>
+        </div>
+        <button
+          onClick={fetchData}
+          className="mt-3 px-4 py-2 bg-rose-600 hover:bg-rose-700 text-white rounded-lg text-xs font-semibold shadow-xs inline-flex items-center gap-1.5 transition-colors"
+        >
+          <RefreshCw className="w-3.5 h-3.5" />
+          <span>ลองใหม่อีกครั้ง (Retry)</span>
+        </button>
+      </div>
+    );
+  }
+
+  if (!summary) return null;
 
   return (
     <div className="p-4 sm:p-6 space-y-6">
