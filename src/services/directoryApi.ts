@@ -13,7 +13,8 @@ import {
   AdGroup, 
   AuditLogEntry, 
   DashboardSummary, 
-  PagedResult 
+  PagedResult,
+  ConnectionReadinessReport
 } from '../types/ad';
 import { 
   MOCK_USERS, 
@@ -84,6 +85,7 @@ export interface HealthStatus {
 
 export interface IDirectoryApi {
   getHealth(): Promise<HealthStatus>;
+  getConnectionReadiness(): Promise<ConnectionReadinessReport>;
   getDashboardSummary(): Promise<DashboardSummary>;
   getUsers(options?: UserFilterOptions): Promise<PagedResult<AdUser>>;
   getUserById(id: string): Promise<AdUser | null>;
@@ -114,14 +116,119 @@ export class MockDirectoryApi implements IDirectoryApi {
       status: 'Healthy',
       system: 'Samchuk Hospital Active Directory Management API',
       environment: 'Development',
-      mode: 'Mock-Only (Phase 1 Final Hardening)',
+      mode: 'Phase 2A — Offline LDAPS Adapter & Mock Mode',
       activeDirectory: {
         liveConnection: false,
         writeOperations: 'Disabled (Phase 4 Planned)',
-        provider: 'In-Memory Synthetic Mock Provider'
+        provider: 'In-Memory Synthetic Mock Provider (Phase 2A Hard-Locked)'
       },
       architecture: 'Option A: Independent AD Management (Isolated Application Server)',
       timestampUtc: new Date().toISOString()
+    };
+  }
+
+  async getConnectionReadiness(): Promise<ConnectionReadinessReport> {
+    await this.simulateLatency();
+    return {
+      phase: 'Phase 2A — Offline LDAPS Adapter & Readiness Preparation',
+      architecture: 'Option A: Independent AD Management (Isolated Application Server)',
+      overallStatus: 'Simulated / Not Tested (Live AD Connection Strictly Disabled in Phase 2A)',
+      isLiveAdConnectionActive: false,
+      isPhase2ACodeGateLocked: true,
+      disclaimer:
+        'โหมดเตรียมความพร้อม Phase 2A: ผลลัพธ์ทั้งหมดเป็นสถานะจำลอง (Simulated) หรือยังไม่ได้ทดสอบจริง (Not Tested / Not Configured) ห้ามถือเป็นผลการเชื่อมต่อ Domain Controller จริง',
+      generatedAtUtc: new Date().toISOString(),
+      configuration: {
+        domainControllerFqdn: '__PLACEHOLDER_DC_FQDN__',
+        ldapsPort: 636,
+        useSsl: true,
+        searchBase: 'OU=PLACEHOLDER_ORG_UNIT,DC=placeholder,DC=example',
+        readOnlyServiceAccount: '__PLACEHOLDER_READONLY_SERVICE_ACCOUNT__',
+        servicePasswordStatus: '[REDACTED_NEVER_LOGGED]',
+        connectionTimeoutSeconds: 10,
+        ldapPageSize: 100,
+        featureFlagConfiguredValue: false,
+        phase2ACodeGateLocked: true,
+        effectiveLiveConnectionEnabled: false,
+        requireValidCertificateChain: true,
+        requireHostnameMatch: true,
+        allowWildcardCertificates: false,
+        rootCaThumbprintPlaceholder: '__PLACEHOLDER_HOSPITAL_ROOT_CA_THUMBPRINT__',
+      },
+      checks: [
+        {
+          id: 'dns-resolution',
+          name: 'DNS Resolution',
+          nameThai: '1. การแปลงชื่อโดเมน (DNS Resolution)',
+          status: 'NotConfigured',
+          isLiveTested: false,
+          target: '__PLACEHOLDER_DC_FQDN__',
+          summary:
+            '[Not Configured / Not Tested] ยังเป็นค่า Placeholder สำหรับ Phase 2A ยังไม่ได้ระบุ FQDN ของ Domain Controller จริง',
+          remediationOrNextStep:
+            'ระบุ Domain Controller FQDN จริง และตรวจสอบ DNS Forward/Reverse Lookup บน Application Server ก่อนเริ่ม Phase 2B',
+        },
+        {
+          id: 'tcp-636-reachability',
+          name: 'TCP 636 Reachability',
+          nameThai: '2. การเข้าถึงพอร์ตเครือข่าย LDAPS (TCP 636 Reachability)',
+          status: 'NotTested',
+          isLiveTested: false,
+          target: '__PLACEHOLDER_DC_FQDN__:636',
+          summary:
+            '[Not Tested] ปิดการเปิด TCP Socket จริงใน Phase 2A ตามข้อกำหนดความปลอดภัย (Zero Live Network Connection)',
+          remediationOrNextStep:
+            'ประสานทีมเครือข่ายเปิด Firewall เฉพาะ TCP 636 จาก IP ของ Application Server ไปยัง Domain Controller ก่อนเริ่ม Phase 2B',
+        },
+        {
+          id: 'tls-certificate-validation',
+          name: 'TLS Certificate Validation',
+          nameThai: '3. การตรวจสอบใบรับรองความปลอดภัย (TLS Certificate & SAN Validation)',
+          status: 'Simulated',
+          isLiveTested: false,
+          target: 'RequireChain=true, RequireSAN=true, AllowWildcard=false',
+          summary:
+            '[Simulated — Offline Logic Verified] ลอจิกตรวจสอบ X509Chain และ SAN/Hostname (MatchesHostname) พร้อมใช้งานแล้ว แต่ยังไม่ได้ทำ TLS Handshake กับ DC จริง (Not Tested)',
+          remediationOrNextStep:
+            'ติดตั้งใบรับรอง Enterprise Root CA ของโรงพยาบาลสามชุกใน Trusted Root Certification Authorities บน Application Server',
+        },
+        {
+          id: 'ldaps-bind-readiness',
+          name: 'LDAPS Bind Readiness',
+          nameThai: '4. ความพร้อมในการยืนยันตัวตน LDAPS Bind (LDAPS Bind Readiness)',
+          status: 'NotTested',
+          isLiveTested: false,
+          target: 'AuthType.Negotiate over TLS (Timeout: 10s, PageSize: 100)',
+          summary:
+            '[Not Tested] อะแดปเตอร์ LdapsReadService เตรียมคำสั่ง Bind แบบ Read-Only พร้อม Timeout และ CancellationToken แล้ว แต่ถูกล็อกด้วย Phase 2A Code Gate',
+          remediationOrNextStep:
+            'รอการอนุมัติ Security Gate เพื่อทดสอบ LDAPS Bind ในสภาพแวดล้อม Test/Staging ใน Phase 2B',
+        },
+        {
+          id: 'search-base-validation',
+          name: 'Search Base Validation',
+          nameThai: '5. การตรวจสอบโครงสร้าง Search Base DN (Search Base Validation)',
+          status: 'NotConfigured',
+          isLiveTested: false,
+          target: 'OU=PLACEHOLDER_ORG_UNIT,DC=placeholder,DC=example',
+          summary:
+            '[Not Configured] Search Base ยังเป็นค่า Placeholder สำหรับ Phase 2A ยังไม่ได้ระบุ Distinguished Name ของ OU จริง',
+          remediationOrNextStep:
+            'กำหนด Distinguished Name ของ Root OU จริงของโรงพยาบาลสามชุกผ่าน Environment Variable หรือ Secret Store ใน Phase 2B',
+        },
+        {
+          id: 'service-account-permission-readiness',
+          name: 'Service Account Permission Readiness',
+          nameThai: '6. ความพร้อมของบัญชีบริการอ่านข้อมูลอย่างเดียว (Service Account Permission Readiness)',
+          status: 'NotConfigured',
+          isLiveTested: false,
+          target: '__PLACEHOLDER_READONLY_SERVICE_ACCOUNT__ (Password: [REDACTED_NEVER_LOGGED])',
+          summary:
+            '[Not Configured / Not Tested] บัญชีบริการยังเป็นค่า Placeholder (__PLACEHOLDER_READONLY_SERVICE_ACCOUNT__)',
+          remediationOrNextStep:
+            'สร้างบัญชีบริการเฉพาะทางที่มีสิทธิ์ Read-Only เท่านั้น (ห้ามอยู่ในกลุ่ม Domain Admins หรือ Account Operators)',
+        },
+      ],
     };
   }
 
@@ -394,6 +501,11 @@ export class HttpDirectoryApi implements IDirectoryApi {
 
   async getHealth(): Promise<HealthStatus> {
     const res = await this.fetchWithTimeout(`${this.baseUrl}/health`);
+    return res.json();
+  }
+
+  async getConnectionReadiness(): Promise<ConnectionReadinessReport> {
+    const res = await this.fetchWithTimeout(`${this.baseUrl}/diagnostics/connection-readiness`);
     return res.json();
   }
 

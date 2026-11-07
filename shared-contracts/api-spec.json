@@ -26,6 +26,19 @@
         }
       }
     },
+    "/diagnostics/connection-readiness": {
+      "get": {
+        "summary": "Retrieve Phase 2A offline LDAPS connection readiness diagnostics (Simulated / NotTested / NotConfigured)",
+        "responses": {
+          "200": {
+            "description": "Connection readiness report with 6 diagnostic checks and redacted configuration"
+          },
+          "403": {
+            "description": "Forbidden if caller lacks ADOperator, SecurityAuditor, or SystemAdministrator role"
+          }
+        }
+      }
+    },
     "/dashboard/summary": {
       "get": {
         "summary": "Retrieve dashboard summary metrics and service statuses",

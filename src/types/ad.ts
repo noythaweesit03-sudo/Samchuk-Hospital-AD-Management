@@ -166,3 +166,47 @@ export interface PagedResult<T> {
   pageSize: number;
   totalPages: number;
 }
+
+export type DiagnosticCheckStatus = 'Simulated' | 'NotTested' | 'NotConfigured';
+
+export interface DiagnosticCheckItem {
+  id: string;
+  name: string;
+  nameThai: string;
+  status: DiagnosticCheckStatus;
+  isLiveTested: boolean;
+  target: string;
+  summary: string;
+  remediationOrNextStep: string;
+}
+
+export interface RedactedAdConfiguration {
+  domainControllerFqdn: string;
+  ldapsPort: number;
+  useSsl: boolean;
+  searchBase: string;
+  readOnlyServiceAccount: string;
+  servicePasswordStatus: '[REDACTED_NEVER_LOGGED]';
+  connectionTimeoutSeconds: number;
+  ldapPageSize: number;
+  featureFlagConfiguredValue: boolean;
+  phase2ACodeGateLocked: boolean;
+  effectiveLiveConnectionEnabled: boolean;
+  requireValidCertificateChain: boolean;
+  requireHostnameMatch: boolean;
+  allowWildcardCertificates: boolean;
+  rootCaThumbprintPlaceholder: string;
+}
+
+export interface ConnectionReadinessReport {
+  phase: string;
+  architecture: string;
+  overallStatus: string;
+  isLiveAdConnectionActive: boolean;
+  isPhase2ACodeGateLocked: boolean;
+  disclaimer: string;
+  generatedAtUtc: string;
+  configuration: RedactedAdConfiguration;
+  checks: DiagnosticCheckItem[];
+}
+

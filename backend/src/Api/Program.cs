@@ -31,9 +31,16 @@ builder.Services.AddCors(options =>
     });
 });
 
+// Bind Phase 2A Active Directory & LDAPS Configuration Options (Placeholder-based, Feature Flag Disabled)
+builder.Services.Configure<ActiveDirectoryOptions>(
+    builder.Configuration.GetSection(ActiveDirectoryOptions.SectionName));
+
 // Dependency Injection:
-// In Phase 1, strictly register Mock Directory Reader and In-Memory Audit Repository
+// In Phase 2A, strictly register Mock Directory Reader (Live AD connection remains hard-locked),
+// Offline Connection Diagnostics Service, and In-Memory Audit Repository
 builder.Services.AddSingleton<IDirectoryReadService, LdapReadServiceMock>();
+builder.Services.AddSingleton<LdapsReadService>();
+builder.Services.AddSingleton<IConnectionDiagnosticsService, LdapsDiagnosticsService>();
 builder.Services.AddSingleton<IAuditLogRepository, InMemoryAuditLogRepository>();
 
 // Always register Policy-Based RBAC policies across all environments

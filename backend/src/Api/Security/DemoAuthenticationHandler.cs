@@ -38,11 +38,17 @@ public class DemoAuthenticationHandler : AuthenticationHandler<AuthenticationSch
         _environment = environment;
     }
 
+    public static bool IsEnvironmentPermittedForDemoAuth(string? environmentName)
+    {
+        return string.Equals(environmentName, "Development", StringComparison.OrdinalIgnoreCase) ||
+               string.Equals(environmentName, "Test", StringComparison.OrdinalIgnoreCase);
+    }
+
     protected override Task<AuthenticateResult> HandleAuthenticateAsync()
     {
         // STRICT ALLOWLIST: Only permit in Development or Test environments.
         // Any other environment (Production, Staging, UAT, etc.) immediately fails closed.
-        var isAllowedEnvironment = _environment.IsDevelopment() || _environment.IsEnvironment("Test");
+        var isAllowedEnvironment = IsEnvironmentPermittedForDemoAuth(_environment.EnvironmentName);
         if (!isAllowedEnvironment)
         {
             Logger.LogCritical(

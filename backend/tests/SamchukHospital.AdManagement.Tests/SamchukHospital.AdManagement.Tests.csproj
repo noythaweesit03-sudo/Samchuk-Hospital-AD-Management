@@ -14,7 +14,9 @@
   </ItemGroup>
 
   <ItemGroup>
+    <ProjectReference Include="..\..\src\Domain\SamchukHospital.AdManagement.Domain.csproj" />
     <ProjectReference Include="..\..\src\Application\SamchukHospital.AdManagement.Application.csproj" />
     <ProjectReference Include="..\..\src\Infrastructure\SamchukHospital.AdManagement.Infrastructure.csproj" />
+    <ProjectReference Include="..\..\src\Api\SamchukHospital.AdManagement.Api.csproj" />
   </ItemGroup>
 </Project>
