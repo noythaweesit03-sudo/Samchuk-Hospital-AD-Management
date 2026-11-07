@@ -1,4 +1,3 @@
-using Microsoft.Extensions.Options;
 using SamchukHospital.AdManagement.Application.Common.Interfaces;
 
 namespace SamchukHospital.AdManagement.Infrastructure.Directory;
@@ -21,11 +20,6 @@ public class LdapsDiagnosticsService : IConnectionDiagnosticsService
     public LdapsDiagnosticsService(ActiveDirectoryOptions options)
     {
         _options = options ?? new ActiveDirectoryOptions();
-    }
-
-    public LdapsDiagnosticsService(IOptions<ActiveDirectoryOptions> optionsAccessor)
-        : this(optionsAccessor?.Value ?? new ActiveDirectoryOptions())
-    {
     }
 
     public Task<ConnectionReadinessReportDto> GetConnectionReadinessAsync(CancellationToken cancellationToken = default)
@@ -88,8 +82,8 @@ public class LdapsDiagnosticsService : IConnectionDiagnosticsService
                 NameThai = "4. ความพร้อมในการยืนยันตัวตน LDAPS Bind (LDAPS Bind Readiness)",
                 Status = "NotTested",
                 IsLiveTested = false,
-                Target = $"AuthType.Negotiate over TLS (Timeout: {_options.GetEffectiveTimeoutSeconds()}s)",
-                Summary = "[Not Tested] อะแดปเตอร์ LdapsReadService เตรียมคำสั่ง Bind แบบ Read-Only พร้อม Timeout และ CancellationToken แล้ว แต่ถูกล็อกด้วย Phase 2A Code Gate",
+                Target = $"AuthType.Negotiate over TLS (Timeout: {_options.GetEffectiveTimeoutSeconds()}s, WindowLimit: {_options.GetEffectiveMaxResultWindow()})",
+                Summary = "[Not Tested] อะแดปเตอร์ LdapsReadService เตรียมคำสั่ง Bind แบบ Read-Only พร้อม Bounded Paging, Timeout และ CancellationToken แล้ว แต่ถูกล็อกด้วย Phase 2A Code Gate",
                 RemediationOrNextStep = "รอการอนุมัติ Security Gate เพื่อทดสอบ LDAPS Bind ในสภาพแวดล้อม Test/Staging ใน Phase 2B"
             },
             new()
@@ -101,7 +95,7 @@ public class LdapsDiagnosticsService : IConnectionDiagnosticsService
                 IsLiveTested = false,
                 Target = _options.SearchBase,
                 Summary = isDnSyntaxValid
-                    ? $"[Simulated] โครงสร้าง DN ถูกต้องตามไวยากรณ์ ({dnValidationMsg})"
+                    ? $"[Simulated] โครงสร้าง RFC 4514 DN ถูกต้องตามไวยากรณ์ ({dnValidationMsg})"
                     : $"[Not Configured] {dnValidationMsg}",
                 RemediationOrNextStep = "กำหนด Distinguished Name ของ Root OU จริงของโรงพยาบาลสามชุกผ่าน Environment Variable หรือ Secret Store ใน Phase 2B"
             },

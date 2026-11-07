@@ -32,8 +32,10 @@ builder.Services.AddCors(options =>
 });
 
 // Bind Phase 2A Active Directory & LDAPS Configuration Options (Placeholder-based, Feature Flag Disabled)
-builder.Services.Configure<ActiveDirectoryOptions>(
-    builder.Configuration.GetSection(ActiveDirectoryOptions.SectionName));
+var adOptions = builder.Configuration
+    .GetSection(ActiveDirectoryOptions.SectionName)
+    .Get<ActiveDirectoryOptions>() ?? new ActiveDirectoryOptions();
+builder.Services.AddSingleton(adOptions);
 
 // Dependency Injection:
 // In Phase 2A, strictly register Mock Directory Reader (Live AD connection remains hard-locked),

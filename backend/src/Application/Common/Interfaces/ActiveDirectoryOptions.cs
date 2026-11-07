@@ -34,6 +34,20 @@ public class ActiveDirectoryOptions
     public int LdapPageSize { get; set; } = 100;
 
     /// <summary>
+    /// Maximum bounded result window that can be retrieved in a single paged search operation
+    /// to prevent unbounded memory/CPU load on the Application Server and Domain Controller.
+    /// </summary>
+    public int MaxResultWindowLimit { get; set; } = 1000;
+
+    /// <summary>
+    /// Active Directory Account Lockout Duration policy in minutes (default 30 minutes).
+    /// Used when evaluating whether a non-zero lockoutTime attribute is still actively locked
+    /// or has already auto-unlocked after the policy duration elapsed.
+    /// Set to 0 only if the domain policy requires manual administrator unlock (0 = never auto-unlocks).
+    /// </summary>
+    public int LockoutDurationMinutes { get; set; } = 30;
+
+    /// <summary>
     /// Read-only Feature Flag. Defaults to false.
     /// Note: In Phase 2A, enabling this flag in config alone will NOT activate live AD connections
     /// because IsPhase2ACodeGateLocked is enforced in code.
@@ -51,12 +65,17 @@ public class ActiveDirectoryOptions
 
     public int GetEffectivePageSize() => Math.Clamp(LdapPageSize, 1, 500);
 
+    public int GetEffectiveMaxResultWindow() => Math.Clamp(MaxResultWindowLimit, 10, 2000);
+
+    public int GetEffectiveLockoutDurationMinutes() => Math.Clamp(LockoutDurationMinutes, 0, 10080);
+
     public bool HasPlaceholderValues()
     {
         return string.IsNullOrWhiteSpace(DomainControllerFqdn) ||
                DomainControllerFqdn.Contains("PLACEHOLDER", StringComparison.OrdinalIgnoreCase) ||
                DomainControllerFqdn.Contains("TBD", StringComparison.OrdinalIgnoreCase) ||
-               DomainControllerFqdn.EndsWith(".local", StringComparison.OrdinalIgnoreCase) && DomainControllerFqdn.StartsWith("mock-", StringComparison.OrdinalIgnoreCase) ||
+               (DomainControllerFqdn.EndsWith(".local", StringComparison.OrdinalIgnoreCase) &&
+                DomainControllerFqdn.StartsWith("mock-", StringComparison.OrdinalIgnoreCase)) ||
                string.IsNullOrWhiteSpace(SearchBase) ||
                SearchBase.Contains("PLACEHOLDER", StringComparison.OrdinalIgnoreCase) ||
                string.IsNullOrWhiteSpace(ReadOnlyServiceAccount) ||
@@ -79,6 +98,8 @@ public class ActiveDirectoryOptions
             ServicePasswordStatus = "[REDACTED_NEVER_LOGGED]",
             ConnectionTimeoutSeconds = GetEffectiveTimeoutSeconds(),
             LdapPageSize = GetEffectivePageSize(),
+            MaxResultWindowLimit = GetEffectiveMaxResultWindow(),
+            LockoutDurationMinutes = GetEffectiveLockoutDurationMinutes(),
             FeatureFlagConfiguredValue = EnableLiveReadOnlyConnection,
             Phase2ACodeGateLocked = IsPhase2ACodeGateLocked,
             EffectiveLiveConnectionEnabled = IsEffectiveLiveConnectionAllowed,
@@ -98,6 +119,16 @@ public class CertificateValidationOptions
     public string RootCaThumbprintPlaceholder { get; set; } = "__PLACEHOLDER_HOSPITAL_ROOT_CA_THUMBPRINT__";
 }
 
+public class BoundedLdapPagingPlan
+{
+    public int EffectivePageNumber { get; init; }
+    public int EffectivePageSize { get; init; }
+    public int SkipCount { get; init; }
+    public int MaxEntriesToFetch { get; init; }
+    public int LdapControlPageSize { get; init; }
+    public int MaxLdapPagesToFetch { get; init; }
+}
+
 public class RedactedAdConfigurationDto
 {
     public string DomainControllerFqdn { get; set; } = string.Empty;
@@ -108,6 +139,8 @@ public class RedactedAdConfigurationDto
     public string ServicePasswordStatus { get; set; } = "[REDACTED_NEVER_LOGGED]";
     public int ConnectionTimeoutSeconds { get; set; }
     public int LdapPageSize { get; set; }
+    public int MaxResultWindowLimit { get; set; } = 1000;
+    public int LockoutDurationMinutes { get; set; } = 30;
     public bool FeatureFlagConfiguredValue { get; set; }
     public bool Phase2ACodeGateLocked { get; set; } = true;
     public bool EffectiveLiveConnectionEnabled { get; set; } = false;

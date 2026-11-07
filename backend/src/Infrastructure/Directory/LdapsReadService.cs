@@ -2,7 +2,6 @@ using System.DirectoryServices.Protocols;
 using System.Globalization;
 using System.Net;
 using System.Security.Cryptography.X509Certificates;
-using Microsoft.Extensions.Options;
 using SamchukHospital.AdManagement.Application.Common.Interfaces;
 using SamchukHospital.AdManagement.Domain.Entities;
 
@@ -13,8 +12,9 @@ namespace SamchukHospital.AdManagement.Infrastructure.Directory;
 /// 
 /// ARCHITECTURAL BOUNDARY (OPTION A — PHASE 2A):
 /// - Implements complete read-only LDAP query construction, RFC 4515 filter escaping,
-///   LDAP paging (PageResultRequestControl), timeout enforcement, cancellation support,
-///   UAC status decoding, and lastLogonTimestamp conversion.
+///   RFC 4514 DN validation (with escaped comma support), bounded LDAP paging
+///   (PageResultRequestControl + SizeLimit/Window cap), timeout enforcement, cancellation support,
+///   AD Lockout Policy-aware status decoding, objectGUID stable ID mapping, and real whenCreated parsing.
 /// - STRICTLY HARD-LOCKED IN PHASE 2A: Live network connections cannot be enabled via
 ///   configuration alone (ActiveDirectoryOptions.IsPhase2ACodeGateLocked == true).
 /// - Zero write operations exist in this adapter.
@@ -32,7 +32,8 @@ public class LdapsReadService : IDirectoryReadService
         "objectGUID", "sAMAccountName", "userPrincipalName", "displayName",
         "givenName", "sn", "mail", "department", "title", "physicalDeliveryOfficeName",
         "telephoneNumber", "employeeID", "distinguishedName", "userAccountControl",
-        "lockoutTime", "pwdLastSet", "badPwdCount", "lastLogonTimestamp", "whenCreated", "memberOf"
+        "msDS-User-Account-Control-Computed", "lockoutTime", "pwdLastSet", "badPwdCount",
+        "lastLogonTimestamp", "whenCreated", "memberOf"
     };
 
     private static readonly string[] ComputerAttributes =
@@ -43,13 +44,13 @@ public class LdapsReadService : IDirectoryReadService
 
     private static readonly string[] OuAttributes =
     {
-        "objectGUID", "ou", "name", "distinguishedName", "description", "nTSecurityDescriptor"
+        "objectGUID", "ou", "name", "distinguishedName", "description", "whenCreated"
     };
 
     private static readonly string[] GroupAttributes =
     {
         "objectGUID", "sAMAccountName", "displayName", "cn", "distinguishedName",
-        "groupType", "description", "mail", "member", "memberOf"
+        "groupType", "description", "mail", "member", "memberOf", "whenCreated"
     };
 
     private readonly ActiveDirectoryOptions _options;
@@ -62,11 +63,6 @@ public class LdapsReadService : IDirectoryReadService
     public LdapsReadService(ActiveDirectoryOptions options)
     {
         _options = options ?? new ActiveDirectoryOptions();
-    }
-
-    public LdapsReadService(IOptions<ActiveDirectoryOptions> optionsAccessor)
-        : this(optionsAccessor?.Value ?? new ActiveDirectoryOptions())
-    {
     }
 
     /// <summary>
@@ -150,9 +146,22 @@ public class LdapsReadService : IDirectoryReadService
     }
 
     /// <summary>
-    /// Decodes Active Directory userAccountControl bitmask and lockoutTime into AccountStatus.
+    /// Evaluates Active Directory account status accurately according to AD Lockout Policy:
+    /// 1. UF_ACCOUNTDISABLE (0x0002) on userAccountControl takes precedence -> "Disabled".
+    /// 2. If msDS-User-Account-Control-Computed is present, checks its UF_LOCKOUT bit (0x0010),
+    ///    which the Domain Controller dynamically computes against the domain's lockoutDuration policy.
+    /// 3. Otherwise, evaluates lockoutTime > 0 against lockoutDurationMinutes:
+    ///    - In Active Directory, lockoutTime is NOT cleared to 0 when the lockout duration expires
+    ///      automatically; it remains > 0 until the user's next login.
+    ///    - Therefore, if lockoutDurationMinutes > 0 and (lockoutTimeUtc + lockoutDurationMinutes <= referenceUtc),
+    ///      the lockout has already expired and the account is "Enabled", NOT "LockedOut".
     /// </summary>
-    public static string ParseAccountStatus(int userAccountControl, long lockoutTime = 0)
+    public static string ParseAccountStatus(
+        int userAccountControl,
+        long lockoutTime = 0,
+        int? msDsUserAccountControlComputed = null,
+        int lockoutDurationMinutes = 30,
+        DateTime? referenceUtc = null)
     {
         const int UF_ACCOUNTDISABLE = 0x0002;
         const int UF_LOCKOUT = 0x0010;
@@ -162,7 +171,42 @@ public class LdapsReadService : IDirectoryReadService
             return "Disabled";
         }
 
-        if (lockoutTime > 0 || (userAccountControl & UF_LOCKOUT) != 0)
+        if (msDsUserAccountControlComputed.HasValue)
+        {
+            return (msDsUserAccountControlComputed.Value & UF_LOCKOUT) != 0
+                ? "LockedOut"
+                : "Enabled";
+        }
+
+        if (lockoutTime > 0 && lockoutTime < long.MaxValue)
+        {
+            // lockoutDurationMinutes <= 0 indicates permanent lockout until administrator manually unlocks
+            if (lockoutDurationMinutes <= 0)
+            {
+                return "LockedOut";
+            }
+
+            try
+            {
+                var lockoutStartUtc = DateTime.FromFileTimeUtc(lockoutTime);
+                var lockoutExpiresUtc = lockoutStartUtc.AddMinutes(lockoutDurationMinutes);
+                var now = referenceUtc ?? DateTime.UtcNow;
+
+                if (now < lockoutExpiresUtc)
+                {
+                    return "LockedOut";
+                }
+
+                // Lockout window has elapsed; account is automatically unlocked per AD Lockout Policy
+                return "Enabled";
+            }
+            catch (ArgumentOutOfRangeException)
+            {
+                return "Enabled";
+            }
+        }
+
+        if ((userAccountControl & UF_LOCKOUT) != 0)
         {
             return "LockedOut";
         }
@@ -171,20 +215,36 @@ public class LdapsReadService : IDirectoryReadService
     }
 
     /// <summary>
-    /// Extracts human-readable UAC flags from the userAccountControl integer attribute.
+    /// Extracts human-readable UAC flags honoring AD Lockout Policy expiration.
     /// </summary>
-    public static List<string> ParseUacFlags(int userAccountControl, long lockoutTime = 0)
+    public static List<string> ParseUacFlags(
+        int userAccountControl,
+        long lockoutTime = 0,
+        int? msDsUserAccountControlComputed = null,
+        int lockoutDurationMinutes = 30,
+        DateTime? referenceUtc = null)
     {
         var flags = new List<string>();
+        var effectiveStatus = ParseAccountStatus(
+            userAccountControl,
+            lockoutTime,
+            msDsUserAccountControlComputed,
+            lockoutDurationMinutes,
+            referenceUtc);
+
         if ((userAccountControl & 0x0002) != 0) flags.Add("ACCOUNTDISABLE");
-        if ((userAccountControl & 0x0010) != 0 || lockoutTime > 0) flags.Add("LOCKOUT");
+        if (effectiveStatus == "LockedOut") flags.Add("LOCKOUT");
         if ((userAccountControl & 0x0020) != 0) flags.Add("PASSWD_NOTREQD");
         if ((userAccountControl & 0x0040) != 0) flags.Add("PASSWD_CANT_CHANGE");
         if ((userAccountControl & 0x0200) != 0) flags.Add("NORMAL_ACCOUNT");
         if ((userAccountControl & 0x1000) != 0) flags.Add("WORKSTATION_TRUST_ACCOUNT");
         if ((userAccountControl & 0x2000) != 0) flags.Add("SERVER_TRUST_ACCOUNT");
         if ((userAccountControl & 0x10000) != 0) flags.Add("DONT_EXPIRE_PASSWORD");
-        if ((userAccountControl & 0x800000) != 0) flags.Add("PASSWORD_EXPIRED");
+        if ((userAccountControl & 0x800000) != 0 ||
+            (msDsUserAccountControlComputed.HasValue && (msDsUserAccountControlComputed.Value & 0x800000) != 0))
+        {
+            flags.Add("PASSWORD_EXPIRED");
+        }
 
         if (flags.Count == 0)
         {
@@ -192,6 +252,107 @@ public class LdapsReadService : IDirectoryReadService
         }
 
         return flags;
+    }
+
+    /// <summary>
+    /// Calculates a bounded LDAP paging execution plan so queries never load unbounded directory results into memory.
+    /// </summary>
+    public static BoundedLdapPagingPlan CalculateBoundedPagingPlan(
+        int pageNumber,
+        int pageSize,
+        int configuredLdapPageSize = 100,
+        int maxResultWindowLimit = 1000)
+    {
+        var effectivePageNumber = Math.Max(pageNumber, 1);
+        var effectivePageSize = Math.Clamp(pageSize, 1, 100);
+        var effectiveMaxWindow = Math.Clamp(maxResultWindowLimit, 10, 2000);
+        var skipCount = (effectivePageNumber - 1) * effectivePageSize;
+
+        if (skipCount >= effectiveMaxWindow)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(pageNumber),
+                $"Requested page offset ({skipCount}) exceeds maximum safe LDAP result window ({effectiveMaxWindow}). Please refine search filters.");
+        }
+
+        var maxEntriesToFetch = Math.Min(skipCount + effectivePageSize, effectiveMaxWindow);
+        var clampedControlPageSize = Math.Clamp(configuredLdapPageSize, 1, 500);
+        var ldapControlPageSize = Math.Min(clampedControlPageSize, maxEntriesToFetch);
+        var maxLdapPagesToFetch = Math.Max(1, (int)Math.Ceiling((double)maxEntriesToFetch / ldapControlPageSize));
+
+        return new BoundedLdapPagingPlan
+        {
+            EffectivePageNumber = effectivePageNumber,
+            EffectivePageSize = effectivePageSize,
+            SkipCount = skipCount,
+            MaxEntriesToFetch = maxEntriesToFetch,
+            LdapControlPageSize = ldapControlPageSize,
+            MaxLdapPagesToFetch = maxLdapPagesToFetch
+        };
+    }
+
+    /// <summary>
+    /// Converts a 16-byte binary Active Directory objectGUID into a canonical lowercase GUID string (Stable ID).
+    /// Falls back to string GUID parsing or fallbackId only if binary GUID is unavailable.
+    /// </summary>
+    public static string ConvertObjectGuidBytesToString(byte[]? guidBytes, string fallbackId = "")
+    {
+        if (guidBytes != null && guidBytes.Length == 16)
+        {
+            return new Guid(guidBytes).ToString("D");
+        }
+
+        if (!string.IsNullOrWhiteSpace(fallbackId) && Guid.TryParse(fallbackId.Trim(), out var parsedGuid))
+        {
+            return parsedGuid.ToString("D");
+        }
+
+        return fallbackId?.Trim() ?? string.Empty;
+    }
+
+    /// <summary>
+    /// Parses Active Directory whenCreated attribute (ASN.1 GeneralizedTime e.g. "20240310020000.0Z"
+    /// or ISO 8601) into an accurate UTC DateTime instead of using DateTime.UtcNow.
+    /// </summary>
+    public static DateTime ParseAdWhenCreatedToUtc(string? rawWhenCreated)
+    {
+        if (string.IsNullOrWhiteSpace(rawWhenCreated))
+        {
+            return DateTime.UnixEpoch;
+        }
+
+        var trimmed = rawWhenCreated.Trim();
+        string[] generalizedTimeFormats =
+        {
+            "yyyyMMddHHmmss.0Z",
+            "yyyyMMddHHmmss.fZ",
+            "yyyyMMddHHmmss.ffZ",
+            "yyyyMMddHHmmss.fffZ",
+            "yyyyMMddHHmmssZ",
+            "yyyyMMddHHmmss.0zzz",
+            "yyyyMMddHHmmsszzz"
+        };
+
+        if (DateTime.TryParseExact(
+            trimmed,
+            generalizedTimeFormats,
+            CultureInfo.InvariantCulture,
+            DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal,
+            out var exactUtc))
+        {
+            return DateTime.SpecifyKind(exactUtc, DateTimeKind.Utc);
+        }
+
+        if (DateTimeOffset.TryParse(
+            trimmed,
+            CultureInfo.InvariantCulture,
+            DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal,
+            out var dto))
+        {
+            return dto.UtcDateTime;
+        }
+
+        return DateTime.UnixEpoch;
     }
 
     /// <summary>
@@ -243,19 +404,22 @@ public class LdapsReadService : IDirectoryReadService
         return (scope, type);
     }
 
+    /// <summary>
+    /// Extracts the OU path from a Distinguished Name using the RFC 4514 parser
+    /// so escaped commas inside OU names are preserved accurately.
+    /// </summary>
     public static string ExtractOuPathFromDn(string distinguishedName)
     {
-        if (string.IsNullOrWhiteSpace(distinguishedName))
+        if (!LdapFilterSanitizer.TryParseDistinguishedNameRdns(distinguishedName, out var rdns, out _))
         {
             return string.Empty;
         }
 
-        var parts = distinguishedName
-            .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+        var ouRdns = rdns
             .Where(p => p.StartsWith("OU=", StringComparison.OrdinalIgnoreCase))
             .ToList();
 
-        return string.Join(",", parts);
+        return string.Join(",", ouRdns);
     }
 
     private LdapConnection CreateSecureConnection()
@@ -282,29 +446,50 @@ public class LdapsReadService : IDirectoryReadService
     }
 
     /// <summary>
-    /// Executes a read-only paged LDAP search using PageResultRequestControl with timeout and cancellation guards.
+    /// Executes a read-only, strictly bounded paged LDAP search using PageResultRequestControl.
+    /// Stops fetching immediately once maxEntriesToFetch is reached and validates that searchBaseDn
+    /// is scoped within the configured Root SearchBase.
     /// </summary>
-    private List<SearchResultEntry> ExecutePagedSearch(
+    private List<SearchResultEntry> ExecuteBoundedPagedSearch(
         string searchBaseDn,
         string ldapFilter,
         SearchScope scope,
         string[] attributesToLoad,
+        int maxEntriesToFetch,
+        int ldapControlPageSize,
         CancellationToken cancellationToken)
     {
         EnsureLiveConnectionAllowedOrThrow(cancellationToken);
 
-        var results = new List<SearchResultEntry>();
-        var pageSize = _options.GetEffectivePageSize();
+        if (!LdapFilterSanitizer.IsStructurallyValidDistinguishedName(searchBaseDn, out var dnError))
+        {
+            throw new ArgumentException($"Invalid SearchBase DN: {dnError}", nameof(searchBaseDn));
+        }
+
+        if (!LdapFilterSanitizer.IsDnScopedWithinSearchBase(searchBaseDn, _options.SearchBase))
+        {
+            throw new UnauthorizedAccessException(
+                $"SearchBase '{searchBaseDn}' is outside the permitted root SearchBase '{_options.SearchBase}'.");
+        }
+
+        var effectiveMaxEntries = Math.Clamp(maxEntriesToFetch, 1, _options.GetEffectiveMaxResultWindow());
+        var effectiveControlPageSize = Math.Clamp(ldapControlPageSize, 1, Math.Min(500, effectiveMaxEntries));
+        var maxPagesLimit = Math.Max(1, (int)Math.Ceiling((double)effectiveMaxEntries / effectiveControlPageSize));
+
+        var results = new List<SearchResultEntry>(effectiveMaxEntries);
         var timeout = TimeSpan.FromSeconds(_options.GetEffectiveTimeoutSeconds());
-        const int maxPagesSafetyLimit = 100;
 
         using var connection = CreateSecureConnection();
-        var searchRequest = new SearchRequest(searchBaseDn, ldapFilter, scope, attributesToLoad);
-        var pageControl = new PageResultRequestControl(pageSize) { IsCritical = false };
+        var searchRequest = new SearchRequest(searchBaseDn, ldapFilter, scope, attributesToLoad)
+        {
+            TimeLimit = timeout
+        };
+
+        var pageControl = new PageResultRequestControl(effectiveControlPageSize) { IsCritical = false };
         searchRequest.Controls.Add(pageControl);
 
         var pageCount = 0;
-        while (pageCount < maxPagesSafetyLimit)
+        while (pageCount < maxPagesLimit && results.Count < effectiveMaxEntries)
         {
             cancellationToken.ThrowIfCancellationRequested();
             pageCount++;
@@ -313,6 +498,15 @@ public class LdapsReadService : IDirectoryReadService
             foreach (SearchResultEntry entry in response.Entries)
             {
                 results.Add(entry);
+                if (results.Count >= effectiveMaxEntries)
+                {
+                    break;
+                }
+            }
+
+            if (results.Count >= effectiveMaxEntries)
+            {
+                break;
             }
 
             var pageResponse = response.Controls
@@ -334,32 +528,43 @@ public class LdapsReadService : IDirectoryReadService
     {
         EnsureLiveConnectionAllowedOrThrow(cancellationToken);
 
-        var users = ExecutePagedSearch(
+        var maxWindow = _options.GetEffectiveMaxResultWindow();
+        var pageSize = _options.GetEffectivePageSize();
+
+        var users = ExecuteBoundedPagedSearch(
             _options.SearchBase,
-            LdapFilterSanitizer.BuildUserSearchFilter(new UserFilterQuery()),
+            LdapFilterSanitizer.BuildUserSearchFilter(new UserFilterQuery(), _options.GetEffectiveLockoutDurationMinutes()),
             SearchScope.Subtree,
             UserAttributes,
-            cancellationToken).Select(MapEntryToUser).ToList();
+            maxWindow,
+            pageSize,
+            cancellationToken).Select(e => MapEntryToUser(e, _options.GetEffectiveLockoutDurationMinutes())).ToList();
 
-        var computers = ExecutePagedSearch(
+        var computers = ExecuteBoundedPagedSearch(
             _options.SearchBase,
             LdapFilterSanitizer.BuildComputerSearchFilter(new ComputerFilterQuery()),
             SearchScope.Subtree,
             ComputerAttributes,
+            maxWindow,
+            pageSize,
             cancellationToken).Select(MapEntryToComputer).ToList();
 
-        var groups = ExecutePagedSearch(
+        var groups = ExecuteBoundedPagedSearch(
             _options.SearchBase,
             LdapFilterSanitizer.BuildGroupSearchFilter(new GroupFilterQuery()),
             SearchScope.Subtree,
             GroupAttributes,
+            maxWindow,
+            pageSize,
             cancellationToken).Select(MapEntryToGroup).ToList();
 
-        var ous = ExecutePagedSearch(
+        var ous = ExecuteBoundedPagedSearch(
             _options.SearchBase,
             "(objectClass=organizationalUnit)",
             SearchScope.Subtree,
             OuAttributes,
+            maxWindow,
+            pageSize,
             cancellationToken);
 
         return Task.FromResult(new DashboardSummaryDto
@@ -405,9 +610,25 @@ public class LdapsReadService : IDirectoryReadService
     {
         EnsureLiveConnectionAllowedOrThrow(cancellationToken);
 
-        var filter = LdapFilterSanitizer.BuildUserSearchFilter(query);
-        var entries = ExecutePagedSearch(_options.SearchBase, filter, SearchScope.Subtree, UserAttributes, cancellationToken);
-        var mapped = entries.Select(MapEntryToUser).AsQueryable();
+        var pagingPlan = CalculateBoundedPagingPlan(
+            query.PageNumber,
+            query.PageSize,
+            _options.GetEffectivePageSize(),
+            _options.GetEffectiveMaxResultWindow());
+
+        var lockoutDuration = _options.GetEffectiveLockoutDurationMinutes();
+        var filter = LdapFilterSanitizer.BuildUserSearchFilter(query, lockoutDuration);
+
+        var entries = ExecuteBoundedPagedSearch(
+            _options.SearchBase,
+            filter,
+            SearchScope.Subtree,
+            UserAttributes,
+            pagingPlan.MaxEntriesToFetch,
+            pagingPlan.LdapControlPageSize,
+            cancellationToken);
+
+        var mapped = entries.Select(e => MapEntryToUser(e, lockoutDuration)).AsQueryable();
 
         var isDesc = string.Equals(query.SortOrder, "desc", StringComparison.OrdinalIgnoreCase);
         mapped = (query.SortBy?.ToLowerInvariant()) switch
@@ -418,17 +639,15 @@ public class LdapsReadService : IDirectoryReadService
             _ => isDesc ? mapped.OrderByDescending(u => u.DisplayName) : mapped.OrderBy(u => u.DisplayName)
         };
 
-        var pageNumber = Math.Max(query.PageNumber, 1);
-        var pageSize = Math.Clamp(query.PageSize, 1, 100);
-        var total = mapped.Count();
-        var items = mapped.Skip((pageNumber - 1) * pageSize).Take(pageSize).ToList();
+        var totalFetched = mapped.Count();
+        var items = mapped.Skip(pagingPlan.SkipCount).Take(pagingPlan.EffectivePageSize).ToList();
 
         return Task.FromResult(new PagedResult<AdUser>
         {
             Items = items,
-            TotalCount = total,
-            PageNumber = pageNumber,
-            PageSize = pageSize
+            TotalCount = totalFetched,
+            PageNumber = pagingPlan.EffectivePageNumber,
+            PageSize = pagingPlan.EffectivePageSize
         });
     }
 
@@ -436,32 +655,46 @@ public class LdapsReadService : IDirectoryReadService
     {
         EnsureLiveConnectionAllowedOrThrow(cancellationToken);
 
-        var escapedId = LdapFilterSanitizer.EscapeFilterValue(id);
-        var filter = $"(&(objectCategory=person)(objectClass=user)(!(objectClass=computer))(sAMAccountName={escapedId}))";
-        var entries = ExecutePagedSearch(_options.SearchBase, filter, SearchScope.Subtree, UserAttributes, cancellationToken);
+        // Supports lookup by objectGUID (Stable ID) or sAMAccountName
+        var filter = LdapFilterSanitizer.BuildIdentifierOrAccountFilter(
+            "(objectCategory=person)(objectClass=user)(!(objectClass=computer))",
+            "sAMAccountName",
+            id);
+
+        var entries = ExecuteBoundedPagedSearch(_options.SearchBase, filter, SearchScope.Subtree, UserAttributes, 1, 1, cancellationToken);
         var first = entries.FirstOrDefault();
-        return Task.FromResult(first != null ? MapEntryToUser(first) : null);
+        return Task.FromResult(first != null ? MapEntryToUser(first, _options.GetEffectiveLockoutDurationMinutes()) : null);
     }
 
     public Task<PagedResult<AdComputer>> GetComputersAsync(ComputerFilterQuery query, CancellationToken cancellationToken = default)
     {
         EnsureLiveConnectionAllowedOrThrow(cancellationToken);
 
-        var filter = LdapFilterSanitizer.BuildComputerSearchFilter(query);
-        var entries = ExecutePagedSearch(_options.SearchBase, filter, SearchScope.Subtree, ComputerAttributes, cancellationToken);
-        var mapped = entries.Select(MapEntryToComputer).ToList();
+        var pagingPlan = CalculateBoundedPagingPlan(
+            query.PageNumber,
+            query.PageSize,
+            _options.GetEffectivePageSize(),
+            _options.GetEffectiveMaxResultWindow());
 
-        var pageNumber = Math.Max(query.PageNumber, 1);
-        var pageSize = Math.Clamp(query.PageSize, 1, 100);
-        var total = mapped.Count;
-        var items = mapped.Skip((pageNumber - 1) * pageSize).Take(pageSize).ToList();
+        var filter = LdapFilterSanitizer.BuildComputerSearchFilter(query);
+        var entries = ExecuteBoundedPagedSearch(
+            _options.SearchBase,
+            filter,
+            SearchScope.Subtree,
+            ComputerAttributes,
+            pagingPlan.MaxEntriesToFetch,
+            pagingPlan.LdapControlPageSize,
+            cancellationToken);
+
+        var mapped = entries.Select(MapEntryToComputer).ToList();
+        var items = mapped.Skip(pagingPlan.SkipCount).Take(pagingPlan.EffectivePageSize).ToList();
 
         return Task.FromResult(new PagedResult<AdComputer>
         {
             Items = items,
-            TotalCount = total,
-            PageNumber = pageNumber,
-            PageSize = pageSize
+            TotalCount = mapped.Count,
+            PageNumber = pagingPlan.EffectivePageNumber,
+            PageSize = pagingPlan.EffectivePageSize
         });
     }
 
@@ -469,9 +702,12 @@ public class LdapsReadService : IDirectoryReadService
     {
         EnsureLiveConnectionAllowedOrThrow(cancellationToken);
 
-        var escapedId = LdapFilterSanitizer.EscapeFilterValue(id);
-        var filter = $"(&(objectCategory=computer)(objectClass=computer)(cn={escapedId}))";
-        var entries = ExecutePagedSearch(_options.SearchBase, filter, SearchScope.Subtree, ComputerAttributes, cancellationToken);
+        var filter = LdapFilterSanitizer.BuildIdentifierOrAccountFilter(
+            "(objectCategory=computer)(objectClass=computer)",
+            "cn",
+            id);
+
+        var entries = ExecuteBoundedPagedSearch(_options.SearchBase, filter, SearchScope.Subtree, ComputerAttributes, 1, 1, cancellationToken);
         var first = entries.FirstOrDefault();
         return Task.FromResult(first != null ? MapEntryToComputer(first) : null);
     }
@@ -480,18 +716,28 @@ public class LdapsReadService : IDirectoryReadService
     {
         EnsureLiveConnectionAllowedOrThrow(cancellationToken);
 
-        var entries = ExecutePagedSearch(_options.SearchBase, "(objectClass=organizationalUnit)", SearchScope.Subtree, OuAttributes, cancellationToken);
-        var ous = entries.Select(MapEntryToOu).ToList();
-        return Task.FromResult(ous);
+        var entries = ExecuteBoundedPagedSearch(
+            _options.SearchBase,
+            "(objectClass=organizationalUnit)",
+            SearchScope.Subtree,
+            OuAttributes,
+            _options.GetEffectiveMaxResultWindow(),
+            _options.GetEffectivePageSize(),
+            cancellationToken);
+
+        return Task.FromResult(entries.Select(MapEntryToOu).ToList());
     }
 
     public Task<AdOrganizationalUnit?> GetOuByIdAsync(string id, CancellationToken cancellationToken = default)
     {
         EnsureLiveConnectionAllowedOrThrow(cancellationToken);
 
-        var escapedId = LdapFilterSanitizer.EscapeFilterValue(id);
-        var filter = $"(&(objectClass=organizationalUnit)(|(ou={escapedId})(distinguishedName={escapedId})))";
-        var entries = ExecutePagedSearch(_options.SearchBase, filter, SearchScope.Subtree, OuAttributes, cancellationToken);
+        var filter = LdapFilterSanitizer.BuildIdentifierOrAccountFilter(
+            "(objectClass=organizationalUnit)",
+            "ou",
+            id);
+
+        var entries = ExecuteBoundedPagedSearch(_options.SearchBase, filter, SearchScope.Subtree, OuAttributes, 1, 1, cancellationToken);
         var first = entries.FirstOrDefault();
         return Task.FromResult(first != null ? MapEntryToOu(first) : null);
     }
@@ -501,7 +747,15 @@ public class LdapsReadService : IDirectoryReadService
         EnsureLiveConnectionAllowedOrThrow(cancellationToken);
 
         var filter = LdapFilterSanitizer.BuildGroupSearchFilter(query);
-        var entries = ExecutePagedSearch(_options.SearchBase, filter, SearchScope.Subtree, GroupAttributes, cancellationToken);
+        var entries = ExecuteBoundedPagedSearch(
+            _options.SearchBase,
+            filter,
+            SearchScope.Subtree,
+            GroupAttributes,
+            _options.GetEffectiveMaxResultWindow(),
+            _options.GetEffectivePageSize(),
+            cancellationToken);
+
         var groups = entries.Select(MapEntryToGroup);
 
         if (!string.IsNullOrWhiteSpace(query.Scope) && !string.Equals(query.Scope, "All", StringComparison.OrdinalIgnoreCase))
@@ -521,9 +775,12 @@ public class LdapsReadService : IDirectoryReadService
     {
         EnsureLiveConnectionAllowedOrThrow(cancellationToken);
 
-        var escapedId = LdapFilterSanitizer.EscapeFilterValue(id);
-        var filter = $"(&(objectCategory=group)(objectClass=group)(sAMAccountName={escapedId}))";
-        var entries = ExecutePagedSearch(_options.SearchBase, filter, SearchScope.Subtree, GroupAttributes, cancellationToken);
+        var filter = LdapFilterSanitizer.BuildIdentifierOrAccountFilter(
+            "(objectCategory=group)(objectClass=group)",
+            "sAMAccountName",
+            id);
+
+        var entries = ExecuteBoundedPagedSearch(_options.SearchBase, filter, SearchScope.Subtree, GroupAttributes, 1, 1, cancellationToken);
         var first = entries.FirstOrDefault();
         return Task.FromResult(first != null ? MapEntryToGroup(first) : null);
     }
@@ -544,10 +801,35 @@ public class LdapsReadService : IDirectoryReadService
         return int.TryParse(raw, NumberStyles.Integer, CultureInfo.InvariantCulture, out var val) ? val : defaultValue;
     }
 
+    private static int? GetNullableIntAttr(SearchResultEntry entry, string attributeName)
+    {
+        var raw = GetStringAttr(entry, attributeName);
+        return int.TryParse(raw, NumberStyles.Integer, CultureInfo.InvariantCulture, out var val) ? val : null;
+    }
+
     private static long GetLongAttr(SearchResultEntry entry, string attributeName, long defaultValue = 0)
     {
         var raw = GetStringAttr(entry, attributeName);
         return long.TryParse(raw, NumberStyles.Integer, CultureInfo.InvariantCulture, out var val) ? val : defaultValue;
+    }
+
+    private static string ExtractStableObjectGuid(SearchResultEntry entry, string fallbackId)
+    {
+        if (entry.Attributes.Contains("objectGUID") && entry.Attributes["objectGUID"].Count > 0)
+        {
+            var rawVal = entry.Attributes["objectGUID"][0];
+            if (rawVal is byte[] bytes && bytes.Length == 16)
+            {
+                return ConvertObjectGuidBytesToString(bytes, fallbackId);
+            }
+
+            if (rawVal is string strVal && !string.IsNullOrWhiteSpace(strVal))
+            {
+                return ConvertObjectGuidBytesToString(null, strVal);
+            }
+        }
+
+        return ConvertObjectGuidBytesToString(null, fallbackId);
     }
 
     private static List<string> GetMultiStringAttr(SearchResultEntry entry, string attributeName)
@@ -566,16 +848,19 @@ public class LdapsReadService : IDirectoryReadService
         return list;
     }
 
-    private static AdUser MapEntryToUser(SearchResultEntry entry)
+    private static AdUser MapEntryToUser(SearchResultEntry entry, int lockoutDurationMinutes)
     {
         var uac = GetIntAttr(entry, "userAccountControl", 512);
+        var uacComputed = GetNullableIntAttr(entry, "msDS-User-Account-Control-Computed");
         var lockoutTime = GetLongAttr(entry, "lockoutTime", 0);
         var dn = entry.DistinguishedName ?? GetStringAttr(entry, "distinguishedName");
         var sam = GetStringAttr(entry, "sAMAccountName");
+        var stableId = ExtractStableObjectGuid(entry, sam);
+        var whenCreatedUtc = ParseAdWhenCreatedToUtc(GetStringAttr(entry, "whenCreated"));
 
         return new AdUser
         {
-            Id = sam,
+            Id = stableId,
             SamAccountName = sam,
             UserPrincipalName = GetStringAttr(entry, "userPrincipalName"),
             DisplayName = GetStringAttr(entry, "displayName"),
@@ -589,13 +874,13 @@ public class LdapsReadService : IDirectoryReadService
             EmployeeId = GetStringAttr(entry, "employeeID"),
             DistinguishedName = dn,
             OuPath = ExtractOuPathFromDn(dn),
-            Status = ParseAccountStatus(uac, lockoutTime),
+            Status = ParseAccountStatus(uac, lockoutTime, uacComputed, lockoutDurationMinutes),
             UserAccountControl = uac,
-            UacFlags = ParseUacFlags(uac, lockoutTime),
+            UacFlags = ParseUacFlags(uac, lockoutTime, uacComputed, lockoutDurationMinutes),
             PasswordLastSet = ConvertAdFileTimeToUtc(GetStringAttr(entry, "pwdLastSet")),
             BadPasswordCount = GetIntAttr(entry, "badPwdCount", 0),
             LastLogonTimestamp = ConvertAdFileTimeToUtc(GetStringAttr(entry, "lastLogonTimestamp")),
-            CreatedDate = DateTime.UtcNow,
+            CreatedDate = whenCreatedUtc,
             MemberOf = GetMultiStringAttr(entry, "memberOf")
         };
     }
@@ -605,10 +890,12 @@ public class LdapsReadService : IDirectoryReadService
         var uac = GetIntAttr(entry, "userAccountControl", 4096);
         var dn = entry.DistinguishedName ?? GetStringAttr(entry, "distinguishedName");
         var cn = GetStringAttr(entry, "cn");
+        var stableId = ExtractStableObjectGuid(entry, cn);
+        var whenCreatedUtc = ParseAdWhenCreatedToUtc(GetStringAttr(entry, "whenCreated"));
 
         return new AdComputer
         {
-            Id = cn,
+            Id = stableId,
             Name = cn,
             DnsHostName = GetStringAttr(entry, "dNSHostName"),
             OperatingSystem = GetStringAttr(entry, "operatingSystem"),
@@ -618,7 +905,7 @@ public class LdapsReadService : IDirectoryReadService
             Status = ParseAccountStatus(uac) == "Disabled" ? "Disabled" : "Enabled",
             LastLogonTimestamp = ConvertAdFileTimeToUtc(GetStringAttr(entry, "lastLogonTimestamp")),
             DepartmentTag = GetStringAttr(entry, "description"),
-            CreatedDate = DateTime.UtcNow
+            CreatedDate = whenCreatedUtc
         };
     }
 
@@ -631,9 +918,11 @@ public class LdapsReadService : IDirectoryReadService
             name = GetStringAttr(entry, "name");
         }
 
+        var stableId = ExtractStableObjectGuid(entry, name);
+
         return new AdOrganizationalUnit
         {
-            Id = name,
+            Id = stableId,
             Name = name,
             DistinguishedName = dn,
             Description = GetStringAttr(entry, "description"),
@@ -645,6 +934,7 @@ public class LdapsReadService : IDirectoryReadService
     {
         var dn = entry.DistinguishedName ?? GetStringAttr(entry, "distinguishedName");
         var sam = GetStringAttr(entry, "sAMAccountName");
+        var stableId = ExtractStableObjectGuid(entry, sam);
         var groupTypeInt = GetIntAttr(entry, "groupType", unchecked((int)0x80000002));
         var (scope, type) = ParseGroupTypeAndScope(groupTypeInt);
         var memberDns = GetMultiStringAttr(entry, "member");
@@ -659,7 +949,7 @@ public class LdapsReadService : IDirectoryReadService
 
         return new AdGroup
         {
-            Id = sam,
+            Id = stableId,
             SamAccountName = sam,
             DisplayName = GetStringAttr(entry, "displayName"),
             DistinguishedName = dn,

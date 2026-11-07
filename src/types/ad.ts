@@ -189,6 +189,8 @@ export interface RedactedAdConfiguration {
   servicePasswordStatus: '[REDACTED_NEVER_LOGGED]';
   connectionTimeoutSeconds: number;
   ldapPageSize: number;
+  maxResultWindowLimit: number;
+  lockoutDurationMinutes: number;
   featureFlagConfiguredValue: boolean;
   phase2ACodeGateLocked: boolean;
   effectiveLiveConnectionEnabled: boolean;

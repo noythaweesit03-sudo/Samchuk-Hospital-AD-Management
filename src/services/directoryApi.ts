@@ -14,7 +14,8 @@ import {
   AuditLogEntry, 
   DashboardSummary, 
   PagedResult,
-  ConnectionReadinessReport
+  ConnectionReadinessReport,
+  UserRole
 } from '../types/ad';
 import { 
   MOCK_USERS, 
@@ -24,6 +25,7 @@ import {
   MOCK_AUDIT_LOGS, 
   MOCK_DASHBOARD_SUMMARY 
 } from '../mocks/mockData';
+import { hasDiagnosticsAccess } from '../utils/rbac';
 
 export interface UserFilterOptions {
   search?: string;
@@ -85,7 +87,7 @@ export interface HealthStatus {
 
 export interface IDirectoryApi {
   getHealth(): Promise<HealthStatus>;
-  getConnectionReadiness(): Promise<ConnectionReadinessReport>;
+  getConnectionReadiness(callerRole?: UserRole): Promise<ConnectionReadinessReport>;
   getDashboardSummary(): Promise<DashboardSummary>;
   getUsers(options?: UserFilterOptions): Promise<PagedResult<AdUser>>;
   getUserById(id: string): Promise<AdUser | null>;
@@ -127,8 +129,16 @@ export class MockDirectoryApi implements IDirectoryApi {
     };
   }
 
-  async getConnectionReadiness(): Promise<ConnectionReadinessReport> {
+  async getConnectionReadiness(callerRole?: UserRole): Promise<ConnectionReadinessReport> {
     await this.simulateLatency();
+    if (callerRole !== undefined && !hasDiagnosticsAccess(callerRole)) {
+      throw new DirectoryApiError(
+        `Access denied for role '${callerRole}'. Diagnostics requires ADOperator, SecurityAuditor, or SystemAdministrator.`,
+        403,
+        'FORBIDDEN_DIAGNOSTICS_ROLE',
+        'req-rbac-denied'
+      );
+    }
     return {
       phase: 'Phase 2A — Offline LDAPS Adapter & Readiness Preparation',
       architecture: 'Option A: Independent AD Management (Isolated Application Server)',
@@ -147,6 +157,8 @@ export class MockDirectoryApi implements IDirectoryApi {
         servicePasswordStatus: '[REDACTED_NEVER_LOGGED]',
         connectionTimeoutSeconds: 10,
         ldapPageSize: 100,
+        maxResultWindowLimit: 1000,
+        lockoutDurationMinutes: 30,
         featureFlagConfiguredValue: false,
         phase2ACodeGateLocked: true,
         effectiveLiveConnectionEnabled: false,
@@ -504,7 +516,15 @@ export class HttpDirectoryApi implements IDirectoryApi {
     return res.json();
   }
 
-  async getConnectionReadiness(): Promise<ConnectionReadinessReport> {
+  async getConnectionReadiness(callerRole?: UserRole): Promise<ConnectionReadinessReport> {
+    if (callerRole !== undefined && !hasDiagnosticsAccess(callerRole)) {
+      throw new DirectoryApiError(
+        `Access denied for role '${callerRole}'. Diagnostics requires ADOperator, SecurityAuditor, or SystemAdministrator.`,
+        403,
+        'FORBIDDEN_DIAGNOSTICS_ROLE',
+        'req-rbac-denied'
+      );
+    }
     const res = await this.fetchWithTimeout(`${this.baseUrl}/diagnostics/connection-readiness`);
     return res.json();
   }

@@ -84,3 +84,28 @@ export function hasPageAccess(role: UserRole | undefined | null, pageId: string)
 export function getAllowedRolesForPage(pageId: string): UserRole[] {
   return PAGE_PERMISSIONS[pageId]?.allowedRoles || [];
 }
+
+/**
+ * Verifies whether a role is permitted to access Connection Readiness Diagnostics
+ * and Settings / Architecture views.
+ * Matches backend AuthorizationPolicies.ADOperatorOrAbove and DiagnosticsController.IsRolePermittedForDiagnostics:
+ * Allowed: ADOperator, SecurityAuditor, SystemAdministrator
+ * Denied: Viewer, Helpdesk
+ */
+export function hasDiagnosticsAccess(role: UserRole | undefined | null): boolean {
+  return hasPageAccess(role, 'settings');
+}
+
+/**
+ * Verifies whether Demo Authentication is permitted in the target runtime environment.
+ * Mirrors backend DemoAuthenticationHandler.IsEnvironmentPermittedForDemoAuth:
+ * Strictly restricted to Development and Test; rejected in Production, Staging, UAT, etc.
+ */
+export function isDemoAuthPermittedInEnvironment(environmentName: string | null | undefined): boolean {
+  if (!environmentName || environmentName.trim().length === 0) {
+    return false;
+  }
+  const normalized = environmentName.trim().toLowerCase();
+  return normalized === 'development' || normalized === 'test';
+}
+
