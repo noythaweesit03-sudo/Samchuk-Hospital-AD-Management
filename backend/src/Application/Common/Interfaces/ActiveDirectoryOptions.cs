@@ -40,12 +40,17 @@ public class ActiveDirectoryOptions
     public int MaxResultWindowLimit { get; set; } = 1000;
 
     /// <summary>
-    /// Active Directory Account Lockout Duration policy in minutes (default 30 minutes).
+    /// Simulated/Test Account Lockout Duration in minutes (default 30 minutes for Phase 2A testing ONLY).
+    /// IMPORTANT: This is a simulated test configuration value and NOT the actual Samchuk Hospital
+    /// production Active Directory Group Policy (which remains TBD pending hospital AD verification prior to Phase 2B).
     /// Used when evaluating whether a non-zero lockoutTime attribute is still actively locked
-    /// or has already auto-unlocked after the policy duration elapsed.
+    /// or has already auto-unlocked after the test policy duration elapsed.
     /// Set to 0 only if the domain policy requires manual administrator unlock (0 = never auto-unlocks).
     /// </summary>
     public int LockoutDurationMinutes { get; set; } = 30;
+
+    public const string LockoutDurationSimulatedDisclaimer =
+        "SimulatedTestDefault_NotHospitalPolicy (ค่ากำหนดสำหรับการทดสอบ 30 นาที — ไม่ใช่นโยบายจริงของโรงพยาบาลสามชุก รอตรวจสอบค่าจริงจาก AD GPO ก่อนเริ่ม Phase 2B)";
 
     /// <summary>
     /// Read-only Feature Flag. Defaults to false.
@@ -100,6 +105,7 @@ public class ActiveDirectoryOptions
             LdapPageSize = GetEffectivePageSize(),
             MaxResultWindowLimit = GetEffectiveMaxResultWindow(),
             LockoutDurationMinutes = GetEffectiveLockoutDurationMinutes(),
+            LockoutDurationPolicyStatus = LockoutDurationSimulatedDisclaimer,
             FeatureFlagConfiguredValue = EnableLiveReadOnlyConnection,
             Phase2ACodeGateLocked = IsPhase2ACodeGateLocked,
             EffectiveLiveConnectionEnabled = IsEffectiveLiveConnectionAllowed,
@@ -141,6 +147,7 @@ public class RedactedAdConfigurationDto
     public int LdapPageSize { get; set; }
     public int MaxResultWindowLimit { get; set; } = 1000;
     public int LockoutDurationMinutes { get; set; } = 30;
+    public string LockoutDurationPolicyStatus { get; set; } = ActiveDirectoryOptions.LockoutDurationSimulatedDisclaimer;
     public bool FeatureFlagConfiguredValue { get; set; }
     public bool Phase2ACodeGateLocked { get; set; } = true;
     public bool EffectiveLiveConnectionEnabled { get; set; } = false;

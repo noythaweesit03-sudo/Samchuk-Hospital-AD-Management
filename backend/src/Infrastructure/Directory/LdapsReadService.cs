@@ -255,7 +255,8 @@ public class LdapsReadService : IDirectoryReadService
     }
 
     /// <summary>
-    /// Calculates a bounded LDAP paging execution plan so queries never load unbounded directory results into memory.
+    /// Calculates a bounded LDAP paging execution plan so queries never load unbounded directory results into memory
+    /// while supporting accurate sorting and pagination within the bounded window (MaxResultWindowLimit).
     /// </summary>
     public static BoundedLdapPagingPlan CalculateBoundedPagingPlan(
         int pageNumber,
@@ -275,7 +276,7 @@ public class LdapsReadService : IDirectoryReadService
                 $"Requested page offset ({skipCount}) exceeds maximum safe LDAP result window ({effectiveMaxWindow}). Please refine search filters.");
         }
 
-        var maxEntriesToFetch = Math.Min(skipCount + effectivePageSize, effectiveMaxWindow);
+        var maxEntriesToFetch = effectiveMaxWindow;
         var clampedControlPageSize = Math.Clamp(configuredLdapPageSize, 1, 500);
         var ldapControlPageSize = Math.Min(clampedControlPageSize, maxEntriesToFetch);
         var maxLdapPagesToFetch = Math.Max(1, (int)Math.Ceiling((double)maxEntriesToFetch / ldapControlPageSize));
@@ -288,6 +289,37 @@ public class LdapsReadService : IDirectoryReadService
             MaxEntriesToFetch = maxEntriesToFetch,
             LdapControlPageSize = ldapControlPageSize,
             MaxLdapPagesToFetch = maxLdapPagesToFetch
+        };
+    }
+
+    /// <summary>
+    /// Constructs a PagedResult from a sorted bounded window of items.
+    /// Explicitly marks IsTotalCountExact = false and IsResultWindowCapped = true when the LDAP query
+    /// hit MaxResultWindowLimit and additional entries exist beyond the window, preventing a capped
+    /// count from being misrepresented as the true total directory count.
+    /// </summary>
+    public static PagedResult<T> BuildBoundedPagedResult<T>(
+        IReadOnlyList<T> sortedWindowItems,
+        BoundedLdapPagingPlan plan,
+        bool hasMoreEntriesBeyondWindow)
+    {
+        var items = sortedWindowItems
+            .Skip(plan.SkipCount)
+            .Take(plan.EffectivePageSize)
+            .ToList();
+
+        return new PagedResult<T>
+        {
+            Items = items,
+            TotalCount = sortedWindowItems.Count,
+            PageNumber = plan.EffectivePageNumber,
+            PageSize = plan.EffectivePageSize,
+            IsTotalCountExact = !hasMoreEntriesBeyondWindow,
+            IsResultWindowCapped = hasMoreEntriesBeyondWindow,
+            ResultWindowLimit = plan.MaxEntriesToFetch,
+            TotalCountNote = hasMoreEntriesBeyondWindow
+                ? $"ผลลัพธ์เกินเพดานความปลอดภัยสูงสุด (MaxResultWindowLimit = {plan.MaxEntriesToFetch} รายการ) จำนวนที่แสดง ({sortedWindowItems.Count}) เป็นจำนวนสูงสุดในขอบเขตที่ดึงมา ไม่ใช่จำนวนทั้งหมดใน Active Directory กรุณาระบุคำค้นหาหรือตัวกรองให้แคบลง"
+                : null
         };
     }
 
@@ -312,13 +344,14 @@ public class LdapsReadService : IDirectoryReadService
 
     /// <summary>
     /// Parses Active Directory whenCreated attribute (ASN.1 GeneralizedTime e.g. "20240310020000.0Z"
-    /// or ISO 8601) into an accurate UTC DateTime instead of using DateTime.UtcNow.
+    /// or ISO 8601) into an accurate UTC DateTime? instead of using DateTime.UtcNow.
+    /// Returns null if the attribute is missing or malformed.
     /// </summary>
-    public static DateTime ParseAdWhenCreatedToUtc(string? rawWhenCreated)
+    public static DateTime? ParseAdWhenCreatedToUtc(string? rawWhenCreated)
     {
         if (string.IsNullOrWhiteSpace(rawWhenCreated))
         {
-            return DateTime.UnixEpoch;
+            return null;
         }
 
         var trimmed = rawWhenCreated.Trim();
@@ -352,7 +385,7 @@ public class LdapsReadService : IDirectoryReadService
             return dto.UtcDateTime;
         }
 
-        return DateTime.UnixEpoch;
+        return null;
     }
 
     /// <summary>
@@ -446,18 +479,21 @@ public class LdapsReadService : IDirectoryReadService
     }
 
     /// <summary>
-    /// Executes a read-only, strictly bounded paged LDAP search using PageResultRequestControl.
-    /// Stops fetching immediately once maxEntriesToFetch is reached and validates that searchBaseDn
+    /// Executes a read-only, strictly bounded paged LDAP search using PageResultRequestControl
+    /// and optional SortRequestControl.
+    /// Stops fetching immediately once maxEntriesToFetch is reached, detects whether additional
+    /// entries exist beyond the bounded window (HasMoreBeyondWindow), and validates that searchBaseDn
     /// is scoped within the configured Root SearchBase.
     /// </summary>
-    private List<SearchResultEntry> ExecuteBoundedPagedSearch(
+    private (List<SearchResultEntry> Entries, bool HasMoreBeyondWindow) ExecuteBoundedPagedSearch(
         string searchBaseDn,
         string ldapFilter,
         SearchScope scope,
         string[] attributesToLoad,
         int maxEntriesToFetch,
         int ldapControlPageSize,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        SortKey? serverSideSortKey = null)
     {
         EnsureLiveConnectionAllowedOrThrow(cancellationToken);
 
@@ -477,6 +513,7 @@ public class LdapsReadService : IDirectoryReadService
         var maxPagesLimit = Math.Max(1, (int)Math.Ceiling((double)effectiveMaxEntries / effectiveControlPageSize));
 
         var results = new List<SearchResultEntry>(effectiveMaxEntries);
+        var hasMoreBeyondWindow = false;
         var timeout = TimeSpan.FromSeconds(_options.GetEffectiveTimeoutSeconds());
 
         using var connection = CreateSecureConnection();
@@ -488,6 +525,12 @@ public class LdapsReadService : IDirectoryReadService
         var pageControl = new PageResultRequestControl(effectiveControlPageSize) { IsCritical = false };
         searchRequest.Controls.Add(pageControl);
 
+        if (serverSideSortKey != null)
+        {
+            var sortControl = new SortRequestControl(serverSideSortKey) { IsCritical = false };
+            searchRequest.Controls.Add(sortControl);
+        }
+
         var pageCount = 0;
         while (pageCount < maxPagesLimit && results.Count < effectiveMaxEntries)
         {
@@ -495,33 +538,49 @@ public class LdapsReadService : IDirectoryReadService
             pageCount++;
 
             var response = (SearchResponse)connection.SendRequest(searchRequest, timeout);
+            var entryIndex = 0;
+            var totalInPage = response.Entries.Count;
+
             foreach (SearchResultEntry entry in response.Entries)
             {
+                entryIndex++;
                 results.Add(entry);
                 if (results.Count >= effectiveMaxEntries)
                 {
+                    if (entryIndex < totalInPage)
+                    {
+                        hasMoreBeyondWindow = true;
+                    }
                     break;
                 }
-            }
-
-            if (results.Count >= effectiveMaxEntries)
-            {
-                break;
             }
 
             var pageResponse = response.Controls
                 .OfType<PageResultResponseControl>()
                 .FirstOrDefault();
 
-            if (pageResponse == null || pageResponse.Cookie == null || pageResponse.Cookie.Length == 0)
+            var hasMorePagesCookie = pageResponse != null &&
+                                     pageResponse.Cookie != null &&
+                                     pageResponse.Cookie.Length > 0;
+
+            if (results.Count >= effectiveMaxEntries)
+            {
+                if (hasMorePagesCookie)
+                {
+                    hasMoreBeyondWindow = true;
+                }
+                break;
+            }
+
+            if (!hasMorePagesCookie)
             {
                 break;
             }
 
-            pageControl.Cookie = pageResponse.Cookie;
+            pageControl.Cookie = pageResponse!.Cookie;
         }
 
-        return results;
+        return (results, hasMoreBeyondWindow);
     }
 
     public Task<DashboardSummaryDto> GetDashboardSummaryAsync(CancellationToken cancellationToken = default)
@@ -531,34 +590,37 @@ public class LdapsReadService : IDirectoryReadService
         var maxWindow = _options.GetEffectiveMaxResultWindow();
         var pageSize = _options.GetEffectivePageSize();
 
-        var users = ExecuteBoundedPagedSearch(
+        var (userEntries, _) = ExecuteBoundedPagedSearch(
             _options.SearchBase,
             LdapFilterSanitizer.BuildUserSearchFilter(new UserFilterQuery(), _options.GetEffectiveLockoutDurationMinutes()),
             SearchScope.Subtree,
             UserAttributes,
             maxWindow,
             pageSize,
-            cancellationToken).Select(e => MapEntryToUser(e, _options.GetEffectiveLockoutDurationMinutes())).ToList();
+            cancellationToken);
+        var users = userEntries.Select(e => MapEntryToUser(e, _options.GetEffectiveLockoutDurationMinutes())).ToList();
 
-        var computers = ExecuteBoundedPagedSearch(
+        var (computerEntries, _) = ExecuteBoundedPagedSearch(
             _options.SearchBase,
             LdapFilterSanitizer.BuildComputerSearchFilter(new ComputerFilterQuery()),
             SearchScope.Subtree,
             ComputerAttributes,
             maxWindow,
             pageSize,
-            cancellationToken).Select(MapEntryToComputer).ToList();
+            cancellationToken);
+        var computers = computerEntries.Select(MapEntryToComputer).ToList();
 
-        var groups = ExecuteBoundedPagedSearch(
+        var (groupEntries, _) = ExecuteBoundedPagedSearch(
             _options.SearchBase,
             LdapFilterSanitizer.BuildGroupSearchFilter(new GroupFilterQuery()),
             SearchScope.Subtree,
             GroupAttributes,
             maxWindow,
             pageSize,
-            cancellationToken).Select(MapEntryToGroup).ToList();
+            cancellationToken);
+        var groups = groupEntries.Select(MapEntryToGroup).ToList();
 
-        var ous = ExecuteBoundedPagedSearch(
+        var (ous, _) = ExecuteBoundedPagedSearch(
             _options.SearchBase,
             "(objectClass=organizationalUnit)",
             SearchScope.Subtree,
@@ -619,18 +681,27 @@ public class LdapsReadService : IDirectoryReadService
         var lockoutDuration = _options.GetEffectiveLockoutDurationMinutes();
         var filter = LdapFilterSanitizer.BuildUserSearchFilter(query, lockoutDuration);
 
-        var entries = ExecuteBoundedPagedSearch(
+        var isDesc = string.Equals(query.SortOrder, "desc", StringComparison.OrdinalIgnoreCase);
+        var ldapSortAttribute = (query.SortBy?.ToLowerInvariant()) switch
+        {
+            "samaccountname" => "sAMAccountName",
+            "department" => "department",
+            _ => "displayName"
+        };
+        var serverSortKey = new SortKey(ldapSortAttribute, "2.5.13.3", isDesc);
+
+        var (entries, hasMoreBeyondWindow) = ExecuteBoundedPagedSearch(
             _options.SearchBase,
             filter,
             SearchScope.Subtree,
             UserAttributes,
             pagingPlan.MaxEntriesToFetch,
             pagingPlan.LdapControlPageSize,
-            cancellationToken);
+            cancellationToken,
+            serverSortKey);
 
         var mapped = entries.Select(e => MapEntryToUser(e, lockoutDuration)).AsQueryable();
 
-        var isDesc = string.Equals(query.SortOrder, "desc", StringComparison.OrdinalIgnoreCase);
         mapped = (query.SortBy?.ToLowerInvariant()) switch
         {
             "samaccountname" => isDesc ? mapped.OrderByDescending(u => u.SamAccountName) : mapped.OrderBy(u => u.SamAccountName),
@@ -639,16 +710,8 @@ public class LdapsReadService : IDirectoryReadService
             _ => isDesc ? mapped.OrderByDescending(u => u.DisplayName) : mapped.OrderBy(u => u.DisplayName)
         };
 
-        var totalFetched = mapped.Count();
-        var items = mapped.Skip(pagingPlan.SkipCount).Take(pagingPlan.EffectivePageSize).ToList();
-
-        return Task.FromResult(new PagedResult<AdUser>
-        {
-            Items = items,
-            TotalCount = totalFetched,
-            PageNumber = pagingPlan.EffectivePageNumber,
-            PageSize = pagingPlan.EffectivePageSize
-        });
+        var sortedWindowList = mapped.ToList();
+        return Task.FromResult(BuildBoundedPagedResult(sortedWindowList, pagingPlan, hasMoreBeyondWindow));
     }
 
     public Task<AdUser?> GetUserByIdAsync(string id, CancellationToken cancellationToken = default)
@@ -661,7 +724,7 @@ public class LdapsReadService : IDirectoryReadService
             "sAMAccountName",
             id);
 
-        var entries = ExecuteBoundedPagedSearch(_options.SearchBase, filter, SearchScope.Subtree, UserAttributes, 1, 1, cancellationToken);
+        var (entries, _) = ExecuteBoundedPagedSearch(_options.SearchBase, filter, SearchScope.Subtree, UserAttributes, 1, 1, cancellationToken);
         var first = entries.FirstOrDefault();
         return Task.FromResult(first != null ? MapEntryToUser(first, _options.GetEffectiveLockoutDurationMinutes()) : null);
     }
@@ -677,25 +740,24 @@ public class LdapsReadService : IDirectoryReadService
             _options.GetEffectiveMaxResultWindow());
 
         var filter = LdapFilterSanitizer.BuildComputerSearchFilter(query);
-        var entries = ExecuteBoundedPagedSearch(
+        var serverSortKey = new SortKey("cn", "2.5.13.3", false);
+
+        var (entries, hasMoreBeyondWindow) = ExecuteBoundedPagedSearch(
             _options.SearchBase,
             filter,
             SearchScope.Subtree,
             ComputerAttributes,
             pagingPlan.MaxEntriesToFetch,
             pagingPlan.LdapControlPageSize,
-            cancellationToken);
+            cancellationToken,
+            serverSortKey);
 
-        var mapped = entries.Select(MapEntryToComputer).ToList();
-        var items = mapped.Skip(pagingPlan.SkipCount).Take(pagingPlan.EffectivePageSize).ToList();
+        var sortedWindowList = entries
+            .Select(MapEntryToComputer)
+            .OrderBy(c => c.Name, StringComparer.OrdinalIgnoreCase)
+            .ToList();
 
-        return Task.FromResult(new PagedResult<AdComputer>
-        {
-            Items = items,
-            TotalCount = mapped.Count,
-            PageNumber = pagingPlan.EffectivePageNumber,
-            PageSize = pagingPlan.EffectivePageSize
-        });
+        return Task.FromResult(BuildBoundedPagedResult(sortedWindowList, pagingPlan, hasMoreBeyondWindow));
     }
 
     public Task<AdComputer?> GetComputerByIdAsync(string id, CancellationToken cancellationToken = default)
@@ -707,7 +769,7 @@ public class LdapsReadService : IDirectoryReadService
             "cn",
             id);
 
-        var entries = ExecuteBoundedPagedSearch(_options.SearchBase, filter, SearchScope.Subtree, ComputerAttributes, 1, 1, cancellationToken);
+        var (entries, _) = ExecuteBoundedPagedSearch(_options.SearchBase, filter, SearchScope.Subtree, ComputerAttributes, 1, 1, cancellationToken);
         var first = entries.FirstOrDefault();
         return Task.FromResult(first != null ? MapEntryToComputer(first) : null);
     }
@@ -716,7 +778,7 @@ public class LdapsReadService : IDirectoryReadService
     {
         EnsureLiveConnectionAllowedOrThrow(cancellationToken);
 
-        var entries = ExecuteBoundedPagedSearch(
+        var (entries, _) = ExecuteBoundedPagedSearch(
             _options.SearchBase,
             "(objectClass=organizationalUnit)",
             SearchScope.Subtree,
@@ -737,7 +799,7 @@ public class LdapsReadService : IDirectoryReadService
             "ou",
             id);
 
-        var entries = ExecuteBoundedPagedSearch(_options.SearchBase, filter, SearchScope.Subtree, OuAttributes, 1, 1, cancellationToken);
+        var (entries, _) = ExecuteBoundedPagedSearch(_options.SearchBase, filter, SearchScope.Subtree, OuAttributes, 1, 1, cancellationToken);
         var first = entries.FirstOrDefault();
         return Task.FromResult(first != null ? MapEntryToOu(first) : null);
     }
@@ -747,7 +809,7 @@ public class LdapsReadService : IDirectoryReadService
         EnsureLiveConnectionAllowedOrThrow(cancellationToken);
 
         var filter = LdapFilterSanitizer.BuildGroupSearchFilter(query);
-        var entries = ExecuteBoundedPagedSearch(
+        var (entries, _) = ExecuteBoundedPagedSearch(
             _options.SearchBase,
             filter,
             SearchScope.Subtree,
@@ -780,7 +842,7 @@ public class LdapsReadService : IDirectoryReadService
             "sAMAccountName",
             id);
 
-        var entries = ExecuteBoundedPagedSearch(_options.SearchBase, filter, SearchScope.Subtree, GroupAttributes, 1, 1, cancellationToken);
+        var (entries, _) = ExecuteBoundedPagedSearch(_options.SearchBase, filter, SearchScope.Subtree, GroupAttributes, 1, 1, cancellationToken);
         var first = entries.FirstOrDefault();
         return Task.FromResult(first != null ? MapEntryToGroup(first) : null);
     }
@@ -856,7 +918,7 @@ public class LdapsReadService : IDirectoryReadService
         var dn = entry.DistinguishedName ?? GetStringAttr(entry, "distinguishedName");
         var sam = GetStringAttr(entry, "sAMAccountName");
         var stableId = ExtractStableObjectGuid(entry, sam);
-        var whenCreatedUtc = ParseAdWhenCreatedToUtc(GetStringAttr(entry, "whenCreated"));
+        var whenCreatedUtc = ParseAdWhenCreatedToUtc(GetStringAttr(entry, "whenCreated")) ?? DateTime.UnixEpoch;
 
         return new AdUser
         {
@@ -891,7 +953,7 @@ public class LdapsReadService : IDirectoryReadService
         var dn = entry.DistinguishedName ?? GetStringAttr(entry, "distinguishedName");
         var cn = GetStringAttr(entry, "cn");
         var stableId = ExtractStableObjectGuid(entry, cn);
-        var whenCreatedUtc = ParseAdWhenCreatedToUtc(GetStringAttr(entry, "whenCreated"));
+        var whenCreatedUtc = ParseAdWhenCreatedToUtc(GetStringAttr(entry, "whenCreated")) ?? DateTime.UnixEpoch;
 
         return new AdComputer
         {

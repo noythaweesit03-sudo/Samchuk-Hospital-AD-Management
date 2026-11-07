@@ -311,6 +311,18 @@ export const SettingsView: React.FC = () => {
                   <span className="text-slate-400">RootCA Thumbprint: </span>
                   <span className="text-amber-300">{readinessReport.configuration.rootCaThumbprintPlaceholder}</span>
                 </div>
+                <div>
+                  <span className="text-slate-400">Bounded Result Window Limit: </span>
+                  <span className="text-teal-300">
+                    {readinessReport.configuration.maxResultWindowLimit} entries (Capped Window Protection)
+                  </span>
+                </div>
+                <div>
+                  <span className="text-slate-400">Lockout Duration (Test Default): </span>
+                  <span className="text-amber-300">
+                    {readinessReport.configuration.lockoutDurationMinutes}m — {readinessReport.configuration.lockoutDurationPolicyStatus}
+                  </span>
+                </div>
               </div>
             </div>
 

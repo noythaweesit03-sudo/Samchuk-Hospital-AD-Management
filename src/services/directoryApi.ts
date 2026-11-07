@@ -159,6 +159,8 @@ export class MockDirectoryApi implements IDirectoryApi {
         ldapPageSize: 100,
         maxResultWindowLimit: 1000,
         lockoutDurationMinutes: 30,
+        lockoutDurationPolicyStatus:
+          'SimulatedTestDefault_NotHospitalPolicy (ค่ากำหนดสำหรับการทดสอบ 30 นาที — ไม่ใช่นโยบายจริงของโรงพยาบาลสามชุก รอตรวจสอบค่าจริงจาก AD GPO ก่อนเริ่ม Phase 2B)',
         featureFlagConfiguredValue: false,
         phase2ACodeGateLocked: true,
         effectiveLiveConnectionEnabled: false,

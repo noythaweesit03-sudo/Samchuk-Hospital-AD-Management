@@ -53,5 +53,5 @@ jobs:
       - name: Build ASP.NET Core Solution
         run: dotnet build backend/SamchukHospital.AdManagement.sln --no-restore --configuration Release
 
-      - name: Run Backend Unit Tests (UserFilterTests)
+      - name: Run Backend Unit Tests (UserFilterTests & Phase2AReadinessTests)
         run: dotnet test backend/SamchukHospital.AdManagement.sln --no-build --configuration Release --verbosity normal

@@ -71,13 +71,16 @@ public class UserFilterTests
     }
 
     [Fact]
-    public async Task LdapsReadService_InPhase1_IsStrictlyDisabledAndThrowsNotSupported()
+    public async Task LdapsReadService_InPhase2A_IsStrictlyDisabledAndThrowsInvalidOperationException()
     {
         var ldapsService = new LdapsReadService();
 
         Assert.False(ldapsService.IsLiveConnectionEnabled);
-        await Assert.ThrowsAsync<NotSupportedException>(() => ldapsService.GetDashboardSummaryAsync());
-        await Assert.ThrowsAsync<NotSupportedException>(() => ldapsService.GetUsersAsync(new UserFilterQuery()));
+        var ex1 = await Assert.ThrowsAsync<InvalidOperationException>(() => ldapsService.GetDashboardSummaryAsync());
+        Assert.Contains("PHASE_2A_HARD_LOCK", ex1.Message);
+
+        var ex2 = await Assert.ThrowsAsync<InvalidOperationException>(() => ldapsService.GetUsersAsync(new UserFilterQuery()));
+        Assert.Contains("PHASE_2A_HARD_LOCK", ex2.Message);
     }
 
     [Fact]

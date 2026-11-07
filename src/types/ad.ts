@@ -165,6 +165,10 @@ export interface PagedResult<T> {
   pageNumber: number;
   pageSize: number;
   totalPages: number;
+  isTotalCountExact?: boolean;
+  isResultWindowCapped?: boolean;
+  resultWindowLimit?: number;
+  totalCountNote?: string | null;
 }
 
 export type DiagnosticCheckStatus = 'Simulated' | 'NotTested' | 'NotConfigured';
@@ -191,6 +195,7 @@ export interface RedactedAdConfiguration {
   ldapPageSize: number;
   maxResultWindowLimit: number;
   lockoutDurationMinutes: number;
+  lockoutDurationPolicyStatus: string;
   featureFlagConfiguredValue: boolean;
   phase2ACodeGateLocked: boolean;
   effectiveLiveConnectionEnabled: boolean;

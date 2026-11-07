@@ -10,9 +10,16 @@
  * - Phase 2A Hard-Locked Feature Flag Evaluation
  */
 
-import { AccountStatus } from '../types/ad';
+import { AccountStatus, PagedResult } from '../types/ad';
 
 export const MAX_LDAP_SEARCH_INPUT_LENGTH = 128;
+
+/**
+ * Explicit disclaimer that the 30-minute lockout duration used in Phase 2A is a
+ * simulated test default and NOT the actual Samchuk Hospital production AD Group Policy.
+ */
+export const LOCKOUT_DURATION_SIMULATED_DISCLAIMER =
+  'SimulatedTestDefault_NotHospitalPolicy (ค่ากำหนดสำหรับการทดสอบ 30 นาที — ไม่ใช่นโยบายจริงของโรงพยาบาลสามชุก รอตรวจสอบค่าจริงจาก AD GPO ก่อนเริ่ม Phase 2B)';
 
 /**
  * Windows FileTime epoch offset in milliseconds from Unix epoch (1601-01-01T00:00:00Z to 1970-01-01T00:00:00Z)
@@ -259,6 +266,36 @@ export function calculateBoundedLdapPagingPlan(params: {
     targetFetchCount,
     maxEntriesToFetch: safeWindowLimit,
     effectiveLdapControlPageSize,
+  };
+}
+
+/**
+ * Builds a PagedResult from a sorted bounded window of LDAP items.
+ * When hasMoreEntriesBeyondWindow is true (entries exceeded MaxResultWindowLimit),
+ * sets isTotalCountExact = false and isResultWindowCapped = true so that a capped
+ * window count is never misrepresented as the true total directory count.
+ */
+export function buildBoundedLdapPagedResult<T>(
+  sortedWindowItems: T[],
+  plan: BoundedLdapPagingPlan,
+  hasMoreEntriesBeyondWindow: boolean
+): PagedResult<T> {
+  const items = sortedWindowItems.slice(plan.skipCount, plan.skipCount + plan.requestedPageSize);
+  const totalCount = sortedWindowItems.length;
+  const totalPages = Math.max(Math.ceil(totalCount / plan.requestedPageSize), 1);
+
+  return {
+    items,
+    totalCount,
+    pageNumber: plan.requestedPageNumber,
+    pageSize: plan.requestedPageSize,
+    totalPages,
+    isTotalCountExact: !hasMoreEntriesBeyondWindow,
+    isResultWindowCapped: hasMoreEntriesBeyondWindow,
+    resultWindowLimit: plan.maxEntriesToFetch,
+    totalCountNote: hasMoreEntriesBeyondWindow
+      ? `ผลลัพธ์เกินเพดานความปลอดภัยสูงสุด (MaxResultWindowLimit = ${plan.maxEntriesToFetch} รายการ) จำนวนที่แสดง (${totalCount}) เป็นจำนวนสูงสุดในขอบเขตที่ดึงมา ไม่ใช่จำนวนทั้งหมดใน Active Directory กรุณาระบุคำค้นหาหรือตัวกรองให้แคบลง`
+      : null,
   };
 }
 

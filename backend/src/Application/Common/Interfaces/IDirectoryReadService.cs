@@ -97,6 +97,22 @@ public class PagedResult<T>
     public int PageNumber { get; set; }
     public int PageSize { get; set; }
     public int TotalPages => PageSize > 0 ? (int)Math.Ceiling((double)TotalCount / PageSize) : 0;
+
+    /// <summary>
+    /// True when TotalCount represents the exact number of matching records in Active Directory.
+    /// False when the query hit MaxResultWindowLimit and additional matching entries exist beyond the bounded window.
+    /// </summary>
+    public bool IsTotalCountExact { get; set; } = true;
+
+    /// <summary>
+    /// True when the LDAP query reached MaxResultWindowLimit and stopped fetching further pages.
+    /// Prevents misleading the user into believing a capped window count is the true directory total.
+    /// </summary>
+    public bool IsResultWindowCapped { get; set; } = false;
+
+    public int? ResultWindowLimit { get; set; }
+
+    public string? TotalCountNote { get; set; }
 }
 
 public class UserFilterQuery

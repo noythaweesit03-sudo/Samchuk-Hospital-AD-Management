@@ -137,12 +137,13 @@ public class Phase2AReadinessTests
 
         Assert.Equal(60, options.GetEffectiveTimeoutSeconds());
         Assert.Equal(500, options.GetEffectivePageSize());
-        Assert.Equal(2000, options.GetEffectiveMaxResultWindowLimit());
+        Assert.Equal(2000, options.GetEffectiveMaxResultWindow());
         Assert.Equal(30, options.GetEffectiveLockoutDurationMinutes());
 
         var redacted = options.ToRedactedSummary();
         Assert.Equal("[REDACTED_NEVER_LOGGED]", redacted.ServicePasswordStatus);
         Assert.DoesNotContain("SuperSecretValue123!", redacted.ServicePasswordStatus);
+        Assert.Contains("SimulatedTestDefault_NotHospitalPolicy", redacted.LockoutDurationPolicyStatus);
     }
 
     [Fact]
@@ -155,7 +156,7 @@ public class Phase2AReadinessTests
         // Disabled account (514 = 512 + 2)
         Assert.Equal("Disabled", LdapsReadService.ParseAccountStatus(514, 0, lockoutDurationMinutes: 30, referenceUtc: referenceUtc));
 
-        // Active lockout: locked out 10 minutes ago (within 30-minute lockout duration window)
+        // Active lockout: locked out 10 minutes ago (within 30-minute simulated lockout duration window)
         var recentLockoutFileTime = referenceUtc.AddMinutes(-10).ToFileTimeUtc();
         Assert.Equal("LockedOut", LdapsReadService.ParseAccountStatus(512, recentLockoutFileTime, lockoutDurationMinutes: 30, referenceUtc: referenceUtc));
 
@@ -164,8 +165,8 @@ public class Phase2AReadinessTests
         Assert.Equal("Enabled", LdapsReadService.ParseAccountStatus(512, expiredLockoutFileTime, lockoutDurationMinutes: 30, referenceUtc: referenceUtc));
 
         // Authoritative computed attribute (msDS-User-Account-Control-Computed): UF_LOCKOUT (0x0010 = 16)
-        Assert.Equal("LockedOut", LdapsReadService.ParseAccountStatus(512, expiredLockoutFileTime, lockoutDurationMinutes: 30, computedUac: 16, referenceUtc: referenceUtc));
-        Assert.Equal("Enabled", LdapsReadService.ParseAccountStatus(512, recentLockoutFileTime, lockoutDurationMinutes: 30, computedUac: 0, referenceUtc: referenceUtc));
+        Assert.Equal("LockedOut", LdapsReadService.ParseAccountStatus(512, expiredLockoutFileTime, msDsUserAccountControlComputed: 16, lockoutDurationMinutes: 30, referenceUtc: referenceUtc));
+        Assert.Equal("Enabled", LdapsReadService.ParseAccountStatus(512, recentLockoutFileTime, msDsUserAccountControlComputed: 0, lockoutDurationMinutes: 30, referenceUtc: referenceUtc));
 
         // UAC Flags reflect active vs expired lockout
         var activeFlags = LdapsReadService.ParseUacFlags(512, recentLockoutFileTime, lockoutDurationMinutes: 30, referenceUtc: referenceUtc);
@@ -190,28 +191,50 @@ public class Phase2AReadinessTests
     }
 
     [Fact]
-    public void LdapsReadService_BoundedPagingPlan_EnforcesResultWindowAndPreventsUnboundedLoads()
+    public void LdapsReadService_BoundedPagingAndTotalCount_MarksCappedWindowWithoutMisrepresentingExactTotal()
     {
         var plan = LdapsReadService.CalculateBoundedPagingPlan(
-            requestedPageNumber: 2,
-            requestedPageSize: 25,
+            pageNumber: 2,
+            pageSize: 25,
             configuredLdapPageSize: 100,
             maxResultWindowLimit: 500);
 
-        Assert.Equal(2, plan.RequestedPageNumber);
-        Assert.Equal(25, plan.RequestedPageSize);
+        Assert.Equal(2, plan.EffectivePageNumber);
+        Assert.Equal(25, plan.EffectivePageSize);
         Assert.Equal(25, plan.SkipCount);
-        Assert.Equal(50, plan.TargetFetchCount);
         Assert.Equal(500, plan.MaxEntriesToFetch);
-        Assert.Equal(50, plan.EffectiveLdapControlPageSize);
+        Assert.Equal(100, plan.LdapControlPageSize);
+        Assert.Equal(5, plan.MaxLdapPagesToFetch);
 
         // Requesting a page beyond the safety window throws ArgumentOutOfRangeException
         Assert.Throws<ArgumentOutOfRangeException>(() =>
             LdapsReadService.CalculateBoundedPagingPlan(
-                requestedPageNumber: 50,
-                requestedPageSize: 25,
+                pageNumber: 50,
+                pageSize: 25,
                 configuredLdapPageSize: 100,
                 maxResultWindowLimit: 500));
+
+        // When directory entries fit within MaxResultWindowLimit (hasMoreEntriesBeyondWindow = false), TotalCount is exact
+        var sampleWindow = Enumerable.Range(1, 60).Select(i => $"User-{i:D3}").ToList();
+        var exactPaged = LdapsReadService.BuildBoundedPagedResult(sampleWindow, plan, hasMoreEntriesBeyondWindow: false);
+        Assert.Equal(25, exactPaged.Items.Count);
+        Assert.Equal("User-026", exactPaged.Items[0]);
+        Assert.Equal(60, exactPaged.TotalCount);
+        Assert.True(exactPaged.IsTotalCountExact);
+        Assert.False(exactPaged.IsResultWindowCapped);
+        Assert.Null(exactPaged.TotalCountNote);
+
+        // When directory entries exceed MaxResultWindowLimit (hasMoreEntriesBeyondWindow = true),
+        // IsTotalCountExact is false and IsResultWindowCapped is true so TotalCount is never claimed as exact total
+        var cappedWindow = Enumerable.Range(1, 500).Select(i => $"User-{i:D3}").ToList();
+        var cappedPaged = LdapsReadService.BuildBoundedPagedResult(cappedWindow, plan, hasMoreEntriesBeyondWindow: true);
+        Assert.Equal(25, cappedPaged.Items.Count);
+        Assert.Equal(500, cappedPaged.TotalCount);
+        Assert.False(cappedPaged.IsTotalCountExact);
+        Assert.True(cappedPaged.IsResultWindowCapped);
+        Assert.Equal(500, cappedPaged.ResultWindowLimit);
+        Assert.NotNull(cappedPaged.TotalCountNote);
+        Assert.Contains("MaxResultWindowLimit", cappedPaged.TotalCountNote);
     }
 
     [Fact]
@@ -222,7 +245,7 @@ public class Phase2AReadinessTests
         Assert.NotNull(parsedWhenCreated);
         Assert.Equal(new DateTime(2024, 3, 10, 2, 0, 0, DateTimeKind.Utc), parsedWhenCreated.Value);
 
-        // Missing or invalid whenCreated returns DateTime.MinValue sentinel (never DateTime.UtcNow)
+        // Missing or invalid whenCreated returns null (never DateTime.UtcNow)
         Assert.Null(LdapsReadService.ParseAdWhenCreatedToUtc(null));
         Assert.Null(LdapsReadService.ParseAdWhenCreatedToUtc("INVALID_DATE"));
 
@@ -250,6 +273,7 @@ public class Phase2AReadinessTests
         Assert.True(report.IsPhase2ACodeGateLocked);
         Assert.Equal(6, report.Checks.Count);
         Assert.Equal("[REDACTED_NEVER_LOGGED]", report.Configuration.ServicePasswordStatus);
+        Assert.Contains("SimulatedTestDefault_NotHospitalPolicy", report.Configuration.LockoutDurationPolicyStatus);
 
         var allowedStatuses = new[] { "Simulated", "NotTested", "NotConfigured" };
         Assert.All(report.Checks, check =>

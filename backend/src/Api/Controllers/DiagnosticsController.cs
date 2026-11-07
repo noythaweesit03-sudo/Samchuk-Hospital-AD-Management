@@ -24,6 +24,17 @@ public class DiagnosticsController : ControllerBase
         _diagnosticsService = diagnosticsService;
     }
 
+    public static bool IsRolePermittedForDiagnostics(string? role)
+    {
+        if (string.IsNullOrWhiteSpace(role))
+        {
+            return false;
+        }
+
+        var allowedRoles = AuthorizationPolicies.GetAllowedRolesForPolicy(AuthorizationPolicies.ADOperatorOrAbove);
+        return allowedRoles.Contains(role.Trim(), StringComparer.OrdinalIgnoreCase);
+    }
+
     [HttpGet("connection-readiness")]
     [ProducesResponseType(typeof(ConnectionReadinessReportDto), StatusCodes.Status200OK)]
     [ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status403Forbidden)]

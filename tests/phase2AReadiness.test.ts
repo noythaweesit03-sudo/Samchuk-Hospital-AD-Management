@@ -22,11 +22,13 @@ import {
   evaluatePhase2ALiveConnectionGate,
   evaluateAdAccountLockoutStatus,
   calculateBoundedLdapPagingPlan,
+  buildBoundedLdapPagedResult,
   parseAdWhenCreatedToIso,
   formatObjectGuidBytes,
   utcMsToWindowsFileTime,
   MAX_LDAP_SEARCH_INPUT_LENGTH,
   IS_PHASE_2A_CODE_GATE_LOCKED,
+  LOCKOUT_DURATION_SIMULATED_DISCLAIMER,
 } from '../src/utils/ldapEscaping';
 import {
   hasDiagnosticsAccess,
@@ -147,7 +149,7 @@ describe('Phase 2A LDAPS Readiness, Filter Escaping & Diagnostics Tests', () => 
     );
   });
 
-  it('Bounded LDAP paging calculator enforces result window limits and prevents unbounded directory loads', () => {
+  it('Bounded LDAP paging calculator and BuildBoundedPagedResult distinguish exact TotalCount from capped window count', () => {
     const plan = calculateBoundedLdapPagingPlan({
       requestedPageNumber: 2,
       requestedPageSize: 25,
@@ -174,6 +176,26 @@ describe('Phase 2A LDAPS Readiness, Filter Escaping & Diagnostics Tests', () => 
       /LDAP_PAGING_WINDOW_EXCEEDED/,
       'Paging beyond bounded result window must be rejected'
     );
+
+    // Case 1: Entries within MaxResultWindowLimit (hasMoreEntriesBeyondWindow = false) -> isTotalCountExact = true
+    const windowWithinLimit = Array.from({ length: 60 }, (_, idx) => `User-${idx + 1}`);
+    const exactPage = buildBoundedLdapPagedResult(windowWithinLimit, plan, false);
+    assert.equal(exactPage.items.length, 25);
+    assert.equal(exactPage.items[0], 'User-26');
+    assert.equal(exactPage.totalCount, 60);
+    assert.equal(exactPage.isTotalCountExact, true);
+    assert.equal(exactPage.isResultWindowCapped, false);
+    assert.equal(exactPage.totalCountNote, null);
+
+    // Case 2: Entries exceed MaxResultWindowLimit (hasMoreEntriesBeyondWindow = true) -> isTotalCountExact = false
+    const cappedWindow = Array.from({ length: 500 }, (_, idx) => `User-${idx + 1}`);
+    const cappedPage = buildBoundedLdapPagedResult(cappedWindow, plan, true);
+    assert.equal(cappedPage.items.length, 25);
+    assert.equal(cappedPage.totalCount, 500);
+    assert.equal(cappedPage.isTotalCountExact, false, 'Capped window count must not be claimed as exact total');
+    assert.equal(cappedPage.isResultWindowCapped, true);
+    assert.equal(cappedPage.resultWindowLimit, 500);
+    assert.ok(cappedPage.totalCountNote?.includes('MaxResultWindowLimit'));
   });
 
   it('whenCreated parser and objectGUID formatter map real AD attributes instead of current time or unstable names', () => {
@@ -247,7 +269,7 @@ describe('Phase 2A LDAPS Readiness, Filter Escaping & Diagnostics Tests', () => 
     );
   });
 
-  it('MockDirectoryApi.getConnectionReadiness returns all 6 required checks as Simulated/NotTested/NotConfigured', async () => {
+  it('MockDirectoryApi.getConnectionReadiness returns all 6 required checks as Simulated/NotTested/NotConfigured and labels LockoutDuration as test default', async () => {
     const api = new MockDirectoryApi();
     const report = await api.getConnectionReadiness();
 
@@ -257,6 +279,8 @@ describe('Phase 2A LDAPS Readiness, Filter Escaping & Diagnostics Tests', () => 
     assert.equal(report.configuration.servicePasswordStatus, '[REDACTED_NEVER_LOGGED]');
     assert.equal(report.configuration.maxResultWindowLimit, 1000);
     assert.equal(report.configuration.lockoutDurationMinutes, 30);
+    assert.equal(report.configuration.lockoutDurationPolicyStatus, LOCKOUT_DURATION_SIMULATED_DISCLAIMER);
+    assert.ok(report.configuration.lockoutDurationPolicyStatus.includes('SimulatedTestDefault_NotHospitalPolicy'));
     assert.equal(report.checks.length, 6);
 
     const expectedIds = [
